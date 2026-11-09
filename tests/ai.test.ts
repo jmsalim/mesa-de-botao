@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { planShot, type AIView } from '../src/ai';
-import { FIELD } from '../src/config';
+import { BUTTON_R, FIELD } from '../src/config';
 
 const mid = FIELD.W / 2;
 const noRand = () => 0.5; // no noise
@@ -67,7 +67,7 @@ describe('CPU planning', () => {
       const along = ox * p.dx + oy * p.dy;
       const off = Math.abs(ox * p.dy - oy * p.dx);
       const hitsBall = Math.hypot(v.ball.x - b.x, v.ball.y - b.y);
-      if (along > 0 && along < hitsBall) expect(off).toBeGreaterThan(0.72 * 0.95);
+      if (along > 0 && along < hitsBall) expect(off).toBeGreaterThan(BUTTON_R * 2 * 0.95);
     }
   });
 });

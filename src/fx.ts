@@ -87,8 +87,8 @@ export class Fx {
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       }
     };
-    draw(this.ballTrail, '255,255,255', 0.2);
-    draw(this.fireTrail, '255,150,40', 0.5);
+    draw(this.ballTrail, '255,255,255', 0.15);
+    draw(this.fireTrail, '255,150,40', 0.4);
   }
 
   drawParticles(ctx: CanvasRenderingContext2D): void {

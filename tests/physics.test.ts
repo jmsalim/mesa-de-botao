@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Physics } from '../src/physics';
-import { FIELD, MAX_SPEED } from '../src/config';
+import { BALL_R, BUTTON_R, FIELD, MAX_SPEED } from '../src/config';
 
 function run(p: Physics, seconds: number) {
   for (let t = 0; t < seconds; t += 1 / 60) p.step(1 / 60);
@@ -61,5 +61,45 @@ describe('physics', () => {
     p.flick(0, 2, -MAX_SPEED, 0);
     run(p, 3);
     expect(b.getPosition().x).toBeGreaterThan(0);
+  });
+
+  it('detects a ball hugging a wall, but not one in the open or in front of a goal mouth', () => {
+    const p = new Physics();
+    p.ball.setPosition({ x: 4.5, y: 2.7 });
+    expect(p.ballStuck()).toBe(false);
+    p.ball.setPosition({ x: 4.5, y: 0.3 });
+    expect(p.ballStuck()).toBe(true);
+    p.ball.setPosition({ x: 0.4, y: 2.7 }); // in front of the goal mouth
+    expect(p.ballStuck()).toBe(false);
+    p.ball.setPosition({ x: 0.3, y: 0.4 });
+    expect(p.ballStuck()).toBe(true);
+    expect(p.ballInCorner()).toBe(true);
+  });
+
+  it('repositionBall moves a stuck ball to a free, playable spot', () => {
+    const p = new Physics();
+    p.ball.setPosition({ x: 0.25, y: 0.25 });
+    const { to } = p.repositionBall();
+    expect(to.x).toBeGreaterThanOrEqual(1.1 - 1e-6);
+    expect(to.y).toBeGreaterThanOrEqual(1.0 - 1e-6);
+    expect(p.ballStuck()).toBe(false);
+    for (const b of p.allButtons()) {
+      expect(Math.hypot(b.getPosition().x - to.x, b.getPosition().y - to.y)).toBeGreaterThan(BUTTON_R + BALL_R);
+    }
+  });
+
+  it('once the goals are closed the ball stays in the net', () => {
+    const p = new Physics();
+    p.setKeeperY(0, 100);
+    p.ball.setPosition({ x: 2, y: 2.1 });
+    p.ball.setLinearVelocity({ x: -14, y: 0 });
+    let goal: number | null = null;
+    for (let i = 0; i < 120 && goal === null; i++) { p.step(1 / 60); goal = p.ballInGoal(); }
+    expect(goal).toBe(0);
+    p.closeGoals(true);
+    run(p, 3);
+    const x = p.ballPos().x;
+    expect(x).toBeLessThan(0);
+    expect(x).toBeGreaterThan(-FIELD.goalD);
   });
 });

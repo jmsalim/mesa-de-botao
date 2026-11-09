@@ -1,6 +1,6 @@
 import * as planck from 'planck';
 import {
-  BALL_R, BUTTON_R, FIELD, KEEPER_RANGE, KEEPER_SIZE, KEEPER_X, MAX_BALL_SPEED, BUTTON_DAMPING, SUPER_DENSITY, other, type Team,
+  BALL_R, BUTTON_R, FIELD, KEEPER_RANGE, KEEPER_SIZE, KEEPER_X, MAX_BALL_SPEED, BUTTON_DAMPING, PLAY_MARGIN, STUCK_MARGIN, SUPER_DENSITY, other, type Team,
 } from './config';
 import type { ContactInfo } from './rules';
 
@@ -28,6 +28,7 @@ export class Physics {
   /** Fired for every new contact with the closing speed and contact point (for sound and effects). */
   onImpact: (a: ContactInfo, b: ContactInfo, speed: number, x: number, y: number) => void = () => {};
   private superBody: planck.Body | null = null;
+  private barriers: planck.Fixture[] = [];
   private acc = 0;
   /** Seconds all bodies have been (almost) still. */
   stillFor = 0;
@@ -64,9 +65,9 @@ export class Physics {
     // top and bottom rails (span the goal pockets as well)
     box(midX + goalD + t, t, midX, -t);
     box(midX + goalD + t, t, midX, W + t);
-    // pocket back walls
-    box(t, W / 2 + t, -goalD - t, W / 2);
-    box(t, W / 2 + t, L + goalD + t, W / 2);
+    // pocket back walls: the net, so it absorbs the ball instead of bouncing it
+    const netOpt = { friction: 0, restitution: 0.08, filterCategoryBits: CAT.WALL };
+    for (const cx of [-goalD - t, L + goalD + t]) body.createFixture(planck.Box(t, W / 2 + t, Vec2(cx, W / 2), 0), netOpt);
     // end walls with the goal mouth left open
     const seg = (W - goalW) / 2;
     for (const x of [0, L]) {
@@ -77,7 +78,7 @@ export class Physics {
     const barrier = this.world.createBody({ type: 'static' });
     const bOpt = { friction: 0, restitution: 0.2, filterCategoryBits: CAT.BARRIER, filterMaskBits: CAT.BUTTON };
     for (const x of [-0.03, L + 0.03]) {
-      barrier.createFixture(planck.Box(0.05, goalW / 2, Vec2(x, W / 2), 0), bOpt);
+      this.barriers.push(barrier.createFixture(planck.Box(0.05, goalW / 2, Vec2(x, W / 2), 0), bOpt));
     }
   }
 
@@ -128,6 +129,7 @@ export class Physics {
 
   /** Put every piece back on the kickoff formation. */
   resetKickoff(): void {
+    this.closeGoals(false);
     for (const team of [0, 1] as Team[]) {
       FORMATION.forEach(([x, y], i) => {
         this.stop(this.buttons[team][i], team === 0 ? x : FIELD.L - x, y);
@@ -198,6 +200,7 @@ export class Physics {
     for (const b of bodies) {
       const v = b.getLinearVelocity();
       const sp = v.length();
+      if (b === this.ball && (b.getPosition().x < 0 || b.getPosition().x > FIELD.L)) b.setLinearVelocity(v.mul(0.9)); // in the net
       if (b === this.ball && sp > MAX_BALL_SPEED) b.setLinearVelocity(v.mul(MAX_BALL_SPEED / sp));
       else if (sp < 0.5) b.setLinearVelocity(v.mul(0.95));
       if (sp < 0.06) b.setLinearVelocity(Vec2(0, 0));
@@ -208,6 +211,59 @@ export class Physics {
 
   isSettled(): boolean {
     return this.stillFor > 0.2;
+  }
+
+  /** After a goal the net also holds the ball in; reopened for kickoff. */
+  closeGoals(closed: boolean): void {
+    for (const f of this.barriers) {
+      f.setFilterData({ groupIndex: 0, categoryBits: CAT.BARRIER, maskBits: closed ? CAT.BUTTON | CAT.BALL : CAT.BUTTON });
+    }
+  }
+
+  /** Freeze the buttons only: the ball keeps rolling into the net. */
+  freezeButtons(): void {
+    for (const b of this.allButtons()) b.setLinearVelocity(Vec2(0, 0));
+    this.endSuper();
+  }
+
+  /** Ball hugging a wall (not in front of a goal mouth) where it is hard to play. */
+  ballStuck(): boolean {
+    const p = this.ball.getPosition();
+    const { L, W, goalW } = FIELD;
+    const nearSide = p.y < STUCK_MARGIN || p.y > W - STUCK_MARGIN;
+    const inMouth = Math.abs(p.y - W / 2) < goalW / 2 + 0.05;
+    const nearEnd = (p.x < STUCK_MARGIN || p.x > L - STUCK_MARGIN) && !inMouth;
+    return nearSide || nearEnd;
+  }
+
+  /** Ball jammed in a corner where no flick can free it. */
+  ballInCorner(): boolean {
+    const p = this.ball.getPosition();
+    const { L, W } = FIELD;
+    const side = p.y < 0.55 || p.y > W - 0.55;
+    const end = p.x < 0.7 || p.x > L - 0.7;
+    return side && end;
+  }
+
+  /** Put the ball on the nearest free spot of the playable zone. Returns old and new position. */
+  repositionBall(): { from: { x: number; y: number }; to: { x: number; y: number } } {
+    const { L, W } = FIELD;
+    const cur = this.ball.getPosition();
+    const from = { x: cur.x, y: cur.y };
+    const clampX = (x: number) => Math.max(PLAY_MARGIN.x, Math.min(L - PLAY_MARGIN.x, x));
+    const clampY = (y: number) => Math.max(PLAY_MARGIN.y, Math.min(W - PLAY_MARGIN.y, y));
+    const free = (x: number, y: number) =>
+      this.allButtons().every((b) => Vec2.distance(b.getPosition(), Vec2(x, y)) > BUTTON_R + BALL_R + 0.2);
+    for (const r of [0, 0.4, 0.8, 1.2, 1.6, 2.0]) {
+      for (let i = 0; i < (r === 0 ? 1 : 12); i++) {
+        const a = (i / 12) * Math.PI * 2;
+        const x = clampX(from.x + Math.cos(a) * r), y = clampY(from.y + Math.sin(a) * r);
+        if (free(x, y)) { this.stop(this.ball, x, y); this.stillFor = 0; return { from, to: { x, y } }; }
+      }
+    }
+    this.stop(this.ball, L / 2, W / 2);
+    this.stillFor = 0;
+    return { from, to: { x: L / 2, y: W / 2 } };
   }
 
   /** Back to normal weight after a super flick. */

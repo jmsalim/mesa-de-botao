@@ -11,6 +11,8 @@ Futebol de botão in the browser: two players share one phone or laptop and take
 - Hit an opponent's button before the ball and it's a **foul**: the turn passes.
 - To score, tap **Chutar ao gol / Shoot!** first. Your opponent then gets a few seconds to slide their keeper along the goal line, and you flick. Goals that weren't called don't count (goal kick for the defender). Own goals always count for the opponent.
 - First to 3 goals wins. The team that conceded kicks off.
+- Ball stuck on a rail or in a corner? A **Reposicionar bola / Reposition ball** button appears and puts it back on the nearest free spot. Balls jammed in a corner are repositioned automatically.
+- When a goal is scored the ball rolls into the net and the netting wraps around it.
 - **⚡ Super Flick:** every flick that touches the ball charges a bolt. At 3 bolts your buttons glow and your next flick is a heavy, faster fireball.
 - While dragging, a dotted line shows how far the button will slide, where the ball will be sent, and turns red if you'd foul.
 - **Vs computer:** pick it on the start screen to play alone against the CPU (red).

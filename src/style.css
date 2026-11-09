@@ -96,3 +96,7 @@ button.alt:active { box-shadow: 0 1px 0 #8c846f, 0 4px 8px rgba(0,0,0,.4); }
 .btns button { min-width: 230px; }
 #toast.big.show { animation: pop .5s cubic-bezier(.2,1.6,.4,1); }
 @keyframes pop { from { transform: translate(-50%, -50%) scale(.3) rotate(-6deg); } }
+
+#free { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 2; }
+#free[hidden] { display: none; }
+button.small { font-size: .9rem; padding: 8px 16px; border-radius: 12px; box-shadow: 0 3px 0 #a8741a, 0 6px 10px rgba(0,0,0,.4); }

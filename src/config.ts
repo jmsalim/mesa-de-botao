@@ -9,8 +9,8 @@ export const FIELD = {
   frame: 0.5,
 };
 
-export const BUTTON_R = 0.36;
-export const BALL_R = 0.15;
+export const BUTTON_R = 0.28;
+export const BALL_R = 0.115;
 export const KEEPER_SIZE = { w: 0.85, d: 0.3 };
 /** Keeper box centre sits just in front of the goal line. */
 export const KEEPER_X = 0.36;
@@ -32,3 +32,8 @@ export const FLICKS_PER_TURN = 3;
 export const KEEPER_PAUSE_S = 6;
 
 export const other = (t: Team): Team => (t === 0 ? 1 : 0);
+
+/** Ball closer than this to a wall (outside the goal mouth) can be repositioned. */
+export const STUCK_MARGIN = 0.6;
+/** Playable zone the ball is moved back into (distance from side / end walls). */
+export const PLAY_MARGIN = { x: 1.1, y: 1.0 };

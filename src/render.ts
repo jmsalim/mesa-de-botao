@@ -88,17 +88,6 @@ function drawTable(ctx: CanvasRenderingContext2D): void {
     const gx = side === 0 ? -goalD : L;
     ctx.fillStyle = '#10241a';
     ctx.fillRect(gx, (W - goalW) / 2, goalD, goalW);
-    ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 0.015;
-    ctx.beginPath();
-    for (let i = 0; i <= 7; i++) {
-      const x = gx + (goalD * i) / 7;
-      ctx.moveTo(x, (W - goalW) / 2); ctx.lineTo(x, (W + goalW) / 2);
-    }
-    for (let i = 0; i <= 10; i++) {
-      const y = (W - goalW) / 2 + (goalW * i) / 10;
-      ctx.moveTo(gx, y); ctx.lineTo(gx + goalD, y);
-    }
-    ctx.stroke();
   }
 
   // felt
@@ -141,6 +130,38 @@ function drawTable(ctx: CanvasRenderingContext2D): void {
       ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.arc(gx + 0.03, gy + 0.04, 0.085, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#f4f4f0'; ctx.beginPath(); ctx.arc(gx, gy, 0.08, 0, Math.PI * 2); ctx.fill();
     }
+  }
+}
+
+/** Goal netting: a grid that bulges and wraps around the ball when it is inside. */
+function drawNet(ctx: CanvasRenderingContext2D, ball: { x: number; y: number }, time: number): void {
+  const { L, W, goalW, goalD } = FIELD;
+  const COLS = 8, ROWS = 12;
+  for (const side of [0, 1]) {
+    const out = side === 0 ? -1 : 1; // direction pointing out of the field
+    const lineX = side === 0 ? 0 : L;
+    const depth = (ball.x - lineX) * out; // how far the ball is past the goal line
+    const push = Math.max(0, Math.min(1, (depth + 0.05) / goalD));
+    const pt = (c: number, r: number) => {
+      let x = lineX + out * (goalD * c) / COLS;
+      let y = (W - goalW) / 2 + (goalW * r) / ROWS;
+      if (push > 0 && c > 0) {
+        const dx = x - ball.x, dy = y - ball.y;
+        const w = Math.exp(-(dx * dx + dy * dy) / 0.28) * push;
+        x += out * w * 0.22 + (ball.x - x) * w * 0.35;
+        y += (ball.y - y) * w * 0.45 + Math.sin(time * 26 + r) * w * 0.012;
+      }
+      return { x, y };
+    };
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 0.016; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let c = 0; c <= COLS; c++) {
+      for (let r = 0; r <= ROWS; r++) { const q = pt(c, r); if (r === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y); }
+    }
+    for (let r = 0; r <= ROWS; r++) {
+      for (let c = 0; c <= COLS; c++) { const q = pt(c, r); if (c === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y); }
+    }
+    ctx.stroke();
   }
 }
 
@@ -372,6 +393,7 @@ export function render(ctx: CanvasRenderingContext2D, l: Layout, dpr: number, sc
   fx.drawTrails(ctx);
   const bp = phys.ballPos();
   drawBall(ctx, bp.x, bp.y);
+  drawNet(ctx, bp, time); // over the ball, so a scored ball sits inside the netting
   if (drag && drag.kind === 'aim') drawAim(ctx, scene, drag);
   fx.drawParticles(ctx);
 

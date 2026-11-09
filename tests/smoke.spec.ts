@@ -86,7 +86,12 @@ test('a called shot into an open goal scores', async ({ page }) => {
   await page.click('#shoot'); // keeper ready
   await flick(page, 0, 3, 2, 0);
   await expect.poll(() => dbg(page, (d) => d.state.score.join('-')), { timeout: 10_000 }).toBe('1-0');
+  await page.waitForTimeout(700);
   await page.screenshot({ path: 'test-results/goal.png' });
+  // the ball rolled into the net behind the goal line and stays there
+  const bx = await page.evaluate(() => (window as unknown as { __botao: Dbg }).__botao.phys.ballPos().x);
+  expect(bx).toBeGreaterThan(9);
+  expect(bx).toBeLessThan(9.7);
   // after the celebration the game resumes from kickoff with team 1 to play
   await expect.poll(() => dbg(page, (d) => d.state.phase), { timeout: 10_000 }).toBe('aim');
   expect(await dbg(page, (d) => d.state.turn)).toBe(1);

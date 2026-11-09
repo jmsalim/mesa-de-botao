@@ -18,6 +18,7 @@ const ctx = canvas.getContext('2d')!;
 const toast = $('toast');
 const overlay = $('overlay');
 const shootBtn = $<HTMLButtonElement>('shoot');
+const freeBtn = $<HTMLButtonElement>('free');
 
 const phys = new Physics();
 const fx = new Fx();
@@ -37,6 +38,8 @@ let superIdx = -1;
 let lastNotice: rules.Notice | null = null;
 let toastTimer = 0;
 
+/** Current phase, typed wide so TypeScript doesn't narrow it across rules calls. */
+const phaseNow = (): rules.Phase => state.phase;
 const cpuTurn = () => vsCpu && state.turn === CPU_TEAM;
 const teamName = (team: Team) =>
   (team === 0 ? t().team0 : t().team1) + (vsCpu && team === CPU_TEAM ? ` (${t().cpu})` : '');
@@ -158,7 +161,8 @@ function bolts(el: HTMLElement, n: number): void {
 let hudSig = '';
 function updateHud(): void {
   const s = t();
-  const sig = [getLang(), state.phase, state.turn, state.score.join(), state.flicksLeft, state.declared, state.charge.join(), vsCpu, Math.ceil(keeperTimer), audio.isMuted()].join('|');
+  const canFree = started && state.phase === 'aim' && !cpuTurn() && phys.ballStuck();
+  const sig = [canFree, getLang(), state.phase, state.turn, state.score.join(), state.flicksLeft, state.declared, state.charge.join(), vsCpu, Math.ceil(keeperTimer), audio.isMuted()].join('|');
   if (sig === hudSig) return;
   hudSig = sig;
   $('name0').textContent = teamName(0);
@@ -166,6 +170,8 @@ function updateHud(): void {
   $('s0').textContent = String(state.score[0]);
   $('s1').textContent = String(state.score[1]);
   $('lang').textContent = s.lang;
+  freeBtn.textContent = '↻ ' + s.freeBall;
+  freeBtn.hidden = !canFree;
   $('mute').textContent = audio.isMuted() ? '🔇' : '🔊';
   bolts($('ch0'), state.charge[0]);
   bolts($('ch1'), state.charge[1]);
@@ -188,6 +194,17 @@ function updateHud(): void {
   shootBtn.dataset.mode = state.phase === 'keeper' ? 'ready' : 'shoot';
   document.documentElement.lang = getLang() === 'pt' ? 'pt-BR' : 'en';
 }
+
+function repositionBall(auto = false): void {
+  const { from, to } = phys.repositionBall();
+  fx.ballTrail.length = 0;
+  fx.ring(from.x, from.y, 0.5, '255,215,94');
+  fx.ring(to.x, to.y, 0.9, '255,255,255');
+  fx.spark(to.x, to.y, 14, 3, '#fff6c2');
+  audio.click();
+  showToast(t().ballReset + (auto ? '' : ''), false, 1600);
+}
+freeBtn.addEventListener('click', () => { if (state.phase === 'aim' && !cpuTurn() && phys.ballStuck()) repositionBall(); });
 
 function declare(): void {
   if (rules.declareShot(state)) {
@@ -271,6 +288,11 @@ function cpuTick(dt: number): void {
   }
   if (state.phase !== 'aim' || state.turn !== CPU_TEAM) {
     cpuPlan = null; cpuDrag = null; cpuThink = 0; cpuAim = 0;
+    return;
+  }
+  if (!cpuPlan && phys.ballStuck()) {
+    cpuThink += dt;
+    if (cpuThink > 1.1) { repositionBall(); cpuThink = 0; }
     return;
   }
   if (!cpuPlan) {
@@ -358,11 +380,15 @@ function frame(now: number): void {
     const g = phys.ballInGoal();
     if (g !== null) {
       rules.goalReached(state, g);
-      phys.freeze();
+      if (phaseNow() === 'goal' || phaseNow() === 'over') {
+        phys.freezeButtons(); // the ball keeps rolling into the net
+        phys.closeGoals(true);
+      } else phys.freeze();
       goalTimer = 0;
     } else if (phys.isSettled() || moveTime > 10) {
       phys.freeze();
       rules.settle(state);
+      if (phaseNow() === 'aim' && phys.ballInCorner()) repositionBall(true); // nobody can free it from there
     }
   } else {
     timeScale += (1 - timeScale) * Math.min(1, dt * 8);
@@ -372,6 +398,7 @@ function frame(now: number): void {
       if (sec <= 3 && sec > 0 && sec !== lastTickSecond && !(vsCpu && other(state.turn) === CPU_TEAM)) { lastTickSecond = sec; audio.tick(); }
       if (keeperTimer <= 0) confirmKeeper();
     } else if (state.phase === 'goal') {
+      phys.step(dt * timeScale);
       goalTimer += dt;
       if (goalTimer > 2.4) {
         phys.resetKickoff();
@@ -381,6 +408,7 @@ function frame(now: number): void {
         fx.ballTrail.length = 0;
       }
     } else if (state.phase === 'over') {
+      phys.step(dt * timeScale);
       if (overlay.hidden) {
         goalTimer += dt;
         if (goalTimer > 2.4) { showOverlay('over'); hideToast(); audio.win(); }

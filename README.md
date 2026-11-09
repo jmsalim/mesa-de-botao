@@ -11,11 +11,14 @@ Futebol de botão in the browser: two players share one phone or laptop and take
 - Hit an opponent's button before the ball and it's a **foul**: the turn passes.
 - To score, tap **Chutar ao gol / Shoot!** first. Your opponent then gets a few seconds to slide their keeper along the goal line, and you flick. Goals that weren't called don't count (goal kick for the defender). Own goals always count for the opponent.
 - First to 3 goals wins. The team that conceded kicks off.
-- Ball stuck on a rail or in a corner? A **Reposicionar bola / Reposition ball** button appears and puts it back on the nearest free spot. Balls jammed in a corner are repositioned automatically.
+- Ball stuck on a rail, in a corner or against your own goal? A **Reposicionar bola / Reposition ball** button appears and puts it back on the nearest free spot. Balls jammed in a corner are repositioned automatically.
 - When a goal is scored the ball rolls into the net and the netting wraps around it.
 - **⚡ Super Flick:** every flick that touches the ball charges a bolt. At 3 bolts your buttons glow and your next flick is a heavy, faster fireball.
 - While dragging, a dotted line shows how far the button will slide, where the ball will be sent, and turns red if you'd foul.
-- **Vs computer:** pick it on the start screen to play alone against the CPU (red).
+- **Vs computer:** pick it on the start screen, then a level. The CPU plays red and never cheats: all levels use the same power, physics and rules.
+  - **Fácil / Easy:** misses a lot, plays slowly, defends slowly.
+  - **Médio / Medium:** plays clean (avoids fouls and its own keeper), calls its shots.
+  - **Difícil / Hard:** tries ~30 flicks on a hidden copy of the table and plays the best outcome (defence included), reads shot lines with its keeper, and uses the Super Flick.
 - Sound effects are synthesized in code (mute with the speaker chip); phones also get small vibrations on big hits and goals.
 - Portuguese and English UI, switch with the chip at the bottom right.
 
@@ -26,6 +29,7 @@ npm install
 npm run dev        # http://localhost:5173/mesa-de-botao/
 npm test           # rules + physics unit tests (Vitest)
 npm run test:e2e   # headless Chromium smoke tests (Playwright)
+npm run test:balance  # ~80 s CPU-vs-CPU simulations: checks Fácil < Médio < Difícil, fouls and own goals
 npm run build      # type-check and build to dist/
 ```
 
@@ -36,7 +40,8 @@ If Playwright can't find its browser locally, run `npx playwright install chromi
 - Vite + TypeScript, no framework. All art is drawn with Canvas 2D (no image assets).
 - [Planck.js](https://github.com/piqnt/planck.js) (a Box2D port) for physics: continuous collision detection keeps hard flicks from tunnelling through the ball or walls.
 - `src/rules.ts` is a pure state machine (turns, fouls, called shots, goals) with no physics or DOM, so it is unit-tested on its own.
-- `src/ai.ts` is the CPU opponent (pure function, unit-tested); `src/fx.ts` and `src/audio.ts` are the particles, shake and synthesized sound.
+- `src/ai.ts` holds the CPU level profiles and the Fácil/Médio planners (pure, unit-tested); `src/lookahead.ts` is Difícil's time-sliced search on a hidden physics copy; `tests/helpers/sim.ts` plays whole CPU matches headlessly for the balance tests.
+- `src/fx.ts` and `src/audio.ts` are the particles, shake and synthesized sound.
 - Field is simulated in landscape; portrait screens rotate the view and input.
 
 ## Deployment

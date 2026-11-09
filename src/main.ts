@@ -10,7 +10,10 @@ import * as rules from './rules';
 import { getLang, setLang, t } from './i18n';
 import * as audio from './audio';
 import { Fx } from './fx';
-import { keeperTarget, planShot, type Plan } from './ai';
+import {
+  LEVELS, LEVEL_ORDER, keeperTarget, planBasic, planHeuristic, withExecutionError, type AIView, type Level, type Plan,
+} from './ai';
+import { Lookahead } from './lookahead';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('board');
@@ -27,6 +30,12 @@ rules.consumeReset(state);
 let started = false;
 let vsCpu = false;
 const CPU_TEAM: Team = 1;
+let overlayKind: 'start' | 'level' | 'over' = 'start';
+let cpuLevel: Level = 'medium';
+try {
+  const saved = localStorage.getItem('botao-level');
+  if (saved === 'easy' || saved === 'medium' || saved === 'hard') cpuLevel = saved;
+} catch { /* storage may be unavailable */ }
 let layout: Layout = computeLayout(360, 640);
 let dpr = 1;
 let keeperTimer = 0;
@@ -42,7 +51,7 @@ let toastTimer = 0;
 const phaseNow = (): rules.Phase => state.phase;
 const cpuTurn = () => vsCpu && state.turn === CPU_TEAM;
 const teamName = (team: Team) =>
-  (team === 0 ? t().team0 : t().team1) + (vsCpu && team === CPU_TEAM ? ` (${t().cpu})` : '');
+  (team === 0 ? t().team0 : t().team1) + (vsCpu && team === CPU_TEAM ? ` (${t().cpu} · ${t().levels[cpuLevel]})` : '');
 
 // ---------- physics feedback: sound, sparks, shake, haptics ----------
 phys.onContact = (a, b) => {
@@ -136,17 +145,31 @@ function noticeText(n: rules.Notice): string {
   }
 }
 
-function showOverlay(kind: 'start' | 'over'): void {
+function showOverlay(kind: 'start' | 'level' | 'over'): void {
   const s = t();
-  $('ov-title').textContent = kind === 'start' ? s.title : s.win(teamName(state.winner ?? 0));
-  $('ov-sub').textContent = kind === 'start' ? s.subtitle : `${state.score[0]} – ${state.score[1]}`;
+  overlayKind = kind;
+  $('ov-title').textContent = kind === 'start' ? s.title : kind === 'level' ? s.chooseLevel : s.win(teamName(state.winner ?? 0));
+  $('ov-sub').textContent = kind === 'start' ? s.subtitle : kind === 'level' ? s.vsCpu : `${state.score[0]} – ${state.score[1]}`;
   const list = $('ov-list');
   list.replaceChildren();
-  if (kind === 'start') for (const line of s.howto) list.append(Object.assign(document.createElement('li'), { textContent: line }));
-  $('ov-btn').textContent = kind === 'start' ? s.twoPlayers : s.playAgain;
-  $('ov-btn2').textContent = s.vsCpu;
-  $('ov-btn2').hidden = kind !== 'start';
-  $('ov-btn').dataset.kind = kind;
+  const lines = kind === 'start' ? s.howto : kind === 'level' ? s.levelHelp : [];
+  for (const line of lines) list.append(Object.assign(document.createElement('li'), { textContent: line }));
+  const btn = [$('ov-btn'), $('ov-btn2'), $('ov-btn3')];
+  if (kind === 'level') {
+    LEVEL_ORDER.forEach((lv, i) => {
+      btn[i].textContent = s.levels[lv];
+      btn[i].hidden = false;
+      btn[i].classList.toggle('alt', lv !== cpuLevel); // the last-used level is highlighted
+    });
+  } else {
+    btn[0].textContent = kind === 'start' ? s.twoPlayers : s.playAgain;
+    btn[1].textContent = kind === 'start' ? s.vsCpu : s.menu;
+    btn[2].hidden = true;
+    btn[0].classList.remove('alt'); btn[1].classList.add('alt');
+    btn[1].hidden = false;
+  }
+  $('ov-back').textContent = '← ' + s.back;
+  $('ov-back').hidden = kind !== 'level';
   overlay.hidden = false;
 }
 
@@ -161,8 +184,8 @@ function bolts(el: HTMLElement, n: number): void {
 let hudSig = '';
 function updateHud(): void {
   const s = t();
-  const canFree = started && state.phase === 'aim' && !cpuTurn() && phys.ballStuck();
-  const sig = [canFree, getLang(), state.phase, state.turn, state.score.join(), state.flicksLeft, state.declared, state.charge.join(), vsCpu, Math.ceil(keeperTimer), audio.isMuted()].join('|');
+  const canFree = started && state.phase === 'aim' && !cpuTurn() && phys.ballStuck(state.turn);
+  const sig = [canFree, getLang(), state.phase, state.turn, state.score.join(), state.flicksLeft, state.declared, state.charge.join(), vsCpu, cpuLevel, Math.ceil(keeperTimer), audio.isMuted()].join('|');
   if (sig === hudSig) return;
   hudSig = sig;
   $('name0').textContent = teamName(0);
@@ -204,13 +227,14 @@ function repositionBall(auto = false): void {
   audio.click();
   showToast(t().ballReset + (auto ? '' : ''), false, 1600);
 }
-freeBtn.addEventListener('click', () => { if (state.phase === 'aim' && !cpuTurn() && phys.ballStuck()) repositionBall(); });
+freeBtn.addEventListener('click', () => { if (state.phase === 'aim' && !cpuTurn() && phys.ballStuck(state.turn)) repositionBall(); });
 
 function declare(): void {
   if (rules.declareShot(state)) {
     input.abort();
     keeperTimer = KEEPER_PAUSE_S;
     keeperElapsed = 0;
+    cpuKeeperGoal = null;
     audio.click();
   }
 }
@@ -227,7 +251,7 @@ shootBtn.addEventListener('click', () => {
 $('lang').addEventListener('click', () => {
   setLang(getLang() === 'pt' ? 'en' : 'pt');
   hudSig = '';
-  if (!overlay.hidden) showOverlay($('ov-btn').dataset.kind === 'over' ? 'over' : 'start');
+  if (!overlay.hidden) showOverlay(overlayKind);
   if (lastNotice) toast.textContent = noticeText(lastNotice);
 });
 $('mute').addEventListener('click', () => {
@@ -236,16 +260,29 @@ $('mute').addEventListener('click', () => {
   hudSig = '';
 });
 
-function begin(cpu: boolean): void {
-  if ($('ov-btn').dataset.kind === 'over') restart();
-  else vsCpu = cpu;
+function startGame(cpu: boolean, level?: Level): void {
+  if (state.phase === 'over' || overlayKind === 'over') restart();
+  vsCpu = cpu;
+  if (level) {
+    cpuLevel = level;
+    try { localStorage.setItem('botao-level', level); } catch { /* ignore */ }
+  }
   started = true;
   overlay.hidden = true;
   hudSig = '';
-  cpuPlan = null;
+  cpuReset();
 }
-$('ov-btn').addEventListener('click', () => begin(false));
-$('ov-btn2').addEventListener('click', () => begin(true));
+$('ov-btn').addEventListener('click', () => {
+  if (overlayKind === 'level') startGame(true, 'easy');
+  else startGame(vsCpu && overlayKind === 'over', undefined);
+});
+$('ov-btn2').addEventListener('click', () => {
+  if (overlayKind === 'start') showOverlay('level');
+  else if (overlayKind === 'level') startGame(true, 'medium');
+  else showOverlay('start'); // from the end screen: back to the menu
+});
+$('ov-btn3').addEventListener('click', () => startGame(true, 'hard'));
+$('ov-back').addEventListener('click', () => showOverlay('start'));
 window.addEventListener('pointerdown', () => audio.unlock(), { capture: true });
 
 function restart(): void {
@@ -271,42 +308,71 @@ window.addEventListener('resize', resize);
 
 // ---------- CPU opponent ----------
 let cpuPlan: Plan | null = null;
+let cpuSearch: Lookahead | null = null;
+let cpuSearchDeclared = false;
 let cpuThink = 0;
 let cpuAim = 0;
 let cpuDrag: Drag | null = null;
+let cpuKeeperGoal: number | null = null;
+
+function cpuView(me: Team, declared: boolean): AIView {
+  return {
+    me, declared, charge: state.charge[me], ball: phys.ballPos(),
+    keepers: [phys.keeperY(0), phys.keeperY(1)],
+    buttons: phys.buttons.map((team) => team.map((b) => ({ x: b.getPosition().x, y: b.getPosition().y }))),
+  };
+}
+
+function cpuReset(): void {
+  cpuPlan = null; cpuSearch = null; cpuDrag = null; cpuThink = 0; cpuAim = 0; cpuKeeperGoal = null;
+}
 
 function cpuTick(dt: number): void {
   if (!vsCpu || !started) return;
+  const cfg = LEVELS[cpuLevel];
   if (state.phase === 'keeper' && other(state.turn) === CPU_TEAM) {
-    // CPU keeper: slide towards where the ball is, then say "ready"
-    const ty = keeperTarget(phys.ballPos().y);
+    // CPU keeper: slide to where this level thinks the shot is coming, then say "ready"
+    cpuKeeperGoal ??= keeperTarget(cpuView(CPU_TEAM, false), cpuLevel);
     const cur = phys.keeperY(CPU_TEAM);
-    phys.setKeeperY(CPU_TEAM, cur + Math.max(-4 * dt, Math.min(4 * dt, ty - cur)));
+    phys.setKeeperY(CPU_TEAM, cur + Math.max(-cfg.keeperSpeed * dt, Math.min(cfg.keeperSpeed * dt, cpuKeeperGoal - cur)));
     keeperElapsed += dt;
-    if (keeperElapsed > 1.6) confirmKeeper();
+    if (keeperElapsed > cfg.keeperReady) confirmKeeper();
     return;
   }
-  if (state.phase !== 'aim' || state.turn !== CPU_TEAM) {
-    cpuPlan = null; cpuDrag = null; cpuThink = 0; cpuAim = 0;
-    return;
-  }
-  if (!cpuPlan && phys.ballStuck()) {
+  if (state.phase !== 'aim' || state.turn !== CPU_TEAM) { cpuReset(); return; }
+
+  // ball jammed in a corner or against its own goal: use the free reposition, like a human could
+  if (!cpuPlan && !cpuSearch && phys.ballTrapped(CPU_TEAM)) {
     cpuThink += dt;
-    if (cpuThink > 1.1) { repositionBall(); cpuThink = 0; }
+    if (cpuThink > 1.0) { repositionBall(); cpuThink = 0; }
     return;
   }
+
+  cpuThink += dt; // "thinking" time counts every frame of the CPU's turn, planning or not
   if (!cpuPlan) {
-    cpuPlan = planShot({
-      me: CPU_TEAM,
-      buttons: phys.buttons.map((team) => team.map((b) => ({ x: b.getPosition().x, y: b.getPosition().y }))),
-      ball: phys.ballPos(),
-      keeper: { x: 0, y: phys.keeperY(other(CPU_TEAM)) },
-    });
-    cpuThink = 0; cpuAim = 0;
+    const view = cpuView(CPU_TEAM, state.declared);
+    if (cfg.planner === 'lookahead') {
+      // think on a hidden copy of the table, a few milliseconds per frame so the game stays smooth
+      if (!cpuSearch || cpuSearchDeclared !== state.declared) {
+        cpuSearch = new Lookahead(view, phys.snapshot(), Math.random, cpuLevel);
+        cpuSearchDeclared = state.declared;
+      }
+      cpuSearch.step(5);
+      if (!cpuSearch.done || cpuThink < cfg.thinkMin) return;
+      cpuPlan = withExecutionError(cpuSearch.best() ?? planHeuristic(view, Math.random, cfg), cpuLevel);
+      cpuSearch = null;
+    } else {
+      cpuPlan = planBasic(view, cpuLevel);
+    }
+    cpuAim = 0;
   }
-  cpuThink += dt;
-  if (cpuThink < 0.9) return;
-  if (cpuPlan.declare && !state.declared) { declare(); return; }
+  if (cpuThink < cfg.thinkMin) return;
+  if (cpuPlan.declare && !state.declared) {
+    declare();
+    cpuPlan = null; cpuSearch = null;
+    cpuThink = Math.max(0, cfg.thinkMin - 0.3); // after the keeper is set, look again quickly
+    return;
+  }
   // show the "pull back" so the human can see what the CPU is doing, then flick
   cpuAim += dt;
   const b = phys.buttons[CPU_TEAM][cpuPlan.idx].getPosition();
@@ -314,7 +380,7 @@ function cpuTick(dt: number): void {
   cpuDrag = { kind: 'aim', team: CPU_TEAM, idx: cpuPlan.idx, px: b.x - cpuPlan.dx * pull, py: b.y - cpuPlan.dy * pull };
   if (cpuAim >= 0.9) {
     const p = cpuPlan;
-    cpuPlan = null; cpuDrag = null;
+    cpuPlan = null; cpuDrag = null; cpuThink = 0;
     ctl.flick(CPU_TEAM, p.idx, p.dx * p.power * MAX_SPEED, p.dy * p.power * MAX_SPEED);
   }
 }
@@ -382,7 +448,6 @@ function frame(now: number): void {
       rules.goalReached(state, g);
       if (phaseNow() === 'goal' || phaseNow() === 'over') {
         phys.freezeButtons(); // the ball keeps rolling into the net
-        phys.closeGoals(true);
       } else phys.freeze();
       goalTimer = 0;
     } else if (phys.isSettled() || moveTime > 10) {
@@ -438,6 +503,7 @@ requestAnimationFrame(frame);
 (window as unknown as Record<string, unknown>).__botao = {
   get state() { return state; },
   get vsCpu() { return vsCpu; },
+  get cpuLevel() { return cpuLevel; },
   phys,
   fx,
   get layout() { return layout; },

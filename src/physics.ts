@@ -1,6 +1,6 @@
 import * as planck from 'planck';
 import {
-  BALL_R, BUTTON_R, FIELD, KEEPER_RANGE, KEEPER_SIZE, KEEPER_X, MAX_BALL_SPEED, BUTTON_DAMPING, PLAY_MARGIN, STUCK_MARGIN, SUPER_DENSITY, other, type Team,
+  BALL_R, BUTTON_R, FIELD, KEEPER_RANGE, KEEPER_SIZE, KEEPER_X, MAX_BALL_SPEED, BUTTON_DAMPING, OWN_GOAL_TRAP, PLAY_MARGIN, STUCK_MARGIN, SUPER_DENSITY, other, type Team,
 } from './config';
 import type { ContactInfo } from './rules';
 
@@ -10,6 +10,12 @@ const CAT = { BUTTON: 1, BALL: 2, WALL: 4, BARRIER: 8, KEEPER: 16 };
 const STEP = 1 / 120;
 
 export const BUTTONS_PER_TEAM = 4;
+
+export interface Snapshot {
+  buttons: [number, number][][];
+  ball: [number, number];
+  keepers: [number, number];
+}
 
 /** Formation for team 0 in landscape coordinates; team 1 is mirrored. */
 const FORMATION: [number, number][] = [
@@ -28,7 +34,6 @@ export class Physics {
   /** Fired for every new contact with the closing speed and contact point (for sound and effects). */
   onImpact: (a: ContactInfo, b: ContactInfo, speed: number, x: number, y: number) => void = () => {};
   private superBody: planck.Body | null = null;
-  private barriers: planck.Fixture[] = [];
   private acc = 0;
   /** Seconds all bodies have been (almost) still. */
   stillFor = 0;
@@ -58,7 +63,7 @@ export class Physics {
     const { L, W, goalW, goalD } = FIELD;
     const t = 0.5; // wall half-thickness
     const body = this.world.createBody({ type: 'static', position: Vec2(0, 0), userData: { kind: 'wall' } satisfies ContactInfo });
-    const opt = { friction: 0, restitution: 0.65, filterCategoryBits: CAT.WALL };
+    const opt = { friction: 0, restitution: 0.5, filterCategoryBits: CAT.WALL };
     const box = (hx: number, hy: number, cx: number, cy: number) =>
       body.createFixture(planck.Box(hx, hy, Vec2(cx, cy), 0), opt);
     const midX = L / 2;
@@ -78,7 +83,7 @@ export class Physics {
     const barrier = this.world.createBody({ type: 'static' });
     const bOpt = { friction: 0, restitution: 0.2, filterCategoryBits: CAT.BARRIER, filterMaskBits: CAT.BUTTON };
     for (const x of [-0.03, L + 0.03]) {
-      this.barriers.push(barrier.createFixture(planck.Box(0.05, goalW / 2, Vec2(x, W / 2), 0), bOpt));
+      barrier.createFixture(planck.Box(0.05, goalW / 2, Vec2(x, W / 2), 0), bOpt);
     }
   }
 
@@ -110,11 +115,11 @@ export class Physics {
 
   private makeBall(): planck.Body {
     const b = this.world.createBody({
-      type: 'dynamic', bullet: true, linearDamping: 1.5, fixedRotation: true,
+      type: 'dynamic', bullet: true, linearDamping: 1.8, fixedRotation: true,
       userData: { kind: 'ball' } satisfies ContactInfo,
     });
     b.createFixture(planck.Circle(BALL_R), {
-      density: 0.9, friction: 0, restitution: 0.75,
+      density: 0.9, friction: 0, restitution: 0.6,
       filterCategoryBits: CAT.BALL,
       filterMaskBits: CAT.BUTTON | CAT.WALL | CAT.KEEPER,
     });
@@ -129,7 +134,6 @@ export class Physics {
 
   /** Put every piece back on the kickoff formation. */
   resetKickoff(): void {
-    this.closeGoals(false);
     for (const team of [0, 1] as Team[]) {
       FORMATION.forEach(([x, y], i) => {
         this.stop(this.buttons[team][i], team === 0 ? x : FIELD.L - x, y);
@@ -154,6 +158,27 @@ export class Physics {
     }
     this.stop(this.ball, FIELD.L / 2, FIELD.W / 2);
     this.stillFor = 0;
+  }
+
+  /** Positions of everything that can move, for the CPU's hidden-copy lookahead. */
+  snapshot(): Snapshot {
+    const xy = (b: planck.Body): [number, number] => [b.getPosition().x, b.getPosition().y];
+    return {
+      buttons: [this.buttons[0].map(xy), this.buttons[1].map(xy)],
+      ball: xy(this.ball),
+      keepers: [this.keepers[0].getPosition().y, this.keepers[1].getPosition().y],
+    };
+  }
+
+  loadSnapshot(s: Snapshot): void {
+    this.endSuper();
+    for (const team of [0, 1] as Team[]) {
+      s.buttons[team].forEach(([x, y], i) => this.stop(this.buttons[team][i], x, y));
+      this.keepers[team].setPosition(Vec2(this.keepers[team].getPosition().x, s.keepers[team]));
+    }
+    this.stop(this.ball, s.ball[0], s.ball[1]);
+    this.stillFor = 0;
+    this.acc = 0;
   }
 
   allButtons(): planck.Body[] {
@@ -213,27 +238,34 @@ export class Physics {
     return this.stillFor > 0.2;
   }
 
-  /** After a goal the net also holds the ball in; reopened for kickoff. */
-  closeGoals(closed: boolean): void {
-    for (const f of this.barriers) {
-      f.setFilterData({ groupIndex: 0, categoryBits: CAT.BARRIER, maskBits: closed ? CAT.BUTTON | CAT.BALL : CAT.BUTTON });
-    }
-  }
-
   /** Freeze the buttons only: the ball keeps rolling into the net. */
   freezeButtons(): void {
     for (const b of this.allButtons()) b.setLinearVelocity(Vec2(0, 0));
     this.endSuper();
   }
 
-  /** Ball hugging a wall (not in front of a goal mouth) where it is hard to play. */
-  ballStuck(): boolean {
+  /** Ball hugging `team`'s own end wall: every flick from the field only pushes it towards its own goal. */
+  ownGoalTrap(team: Team): boolean {
+    const p = this.ball.getPosition();
+    return team === 0 ? p.x < OWN_GOAL_TRAP : p.x > FIELD.L - OWN_GOAL_TRAP;
+  }
+
+  /**
+   * Ball hugging a wall (not in front of a goal mouth), or, for `team`, trapped against its own goal.
+   * Players can then reposition it; the attacker's chance in front of the opponent's goal is left alone.
+   */
+  ballStuck(team?: Team): boolean {
     const p = this.ball.getPosition();
     const { L, W, goalW } = FIELD;
     const nearSide = p.y < STUCK_MARGIN || p.y > W - STUCK_MARGIN;
     const inMouth = Math.abs(p.y - W / 2) < goalW / 2 + 0.05;
     const nearEnd = (p.x < STUCK_MARGIN || p.x > L - STUCK_MARGIN) && !inMouth;
-    return nearSide || nearEnd;
+    return nearSide || nearEnd || (team !== undefined && this.ownGoalTrap(team));
+  }
+
+  /** What the CPU treats as truly stuck: a corner, or trapped against its own goal. */
+  ballTrapped(team: Team): boolean {
+    return this.ballInCorner() || this.ownGoalTrap(team);
   }
 
   /** Ball jammed in a corner where no flick can free it. */
@@ -280,12 +312,13 @@ export class Physics {
     this.endSuper();
   }
 
-  /** Team whose goal the ball has fully crossed into, if any. */
+  /** Team whose goal the ball has crossed into (centre past the goal line), if any. */
   ballInGoal(): Team | null {
     const p = this.ball.getPosition();
     if (Math.abs(p.y - FIELD.W / 2) > FIELD.goalW / 2) return null;
-    if (p.x < -BALL_R) return 0;
-    if (p.x > FIELD.L + BALL_R) return 1;
+    // centre across the line: a ball can't be left resting half over it, out of every button's reach
+    if (p.x < 0) return 0;
+    if (p.x > FIELD.L) return 1;
     return null;
   }
 

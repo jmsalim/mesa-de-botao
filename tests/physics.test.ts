@@ -76,6 +76,19 @@ describe('physics', () => {
     expect(p.ballInCorner()).toBe(true);
   });
 
+  it('a ball against a team\'s own goal line is stuck for that team only', () => {
+    const p = new Physics();
+    p.ball.setPosition({ x: 0.5, y: 2.7 });
+    expect(p.ballStuck(0)).toBe(true); // team 0 defends the left goal and can't clear it
+    expect(p.ballStuck(1)).toBe(false); // team 1 attacks it: leave the chance alone
+    expect(p.ballTrapped(0)).toBe(true);
+    p.ball.setPosition({ x: 0.5, y: 4.4 }); // beside the mouth, still against its own end wall
+    expect(p.ballStuck(0)).toBe(true);
+    p.ball.setPosition({ x: 8.5, y: 2.7 });
+    expect(p.ballStuck(1)).toBe(true);
+    expect(p.ballStuck(0)).toBe(false);
+  });
+
   it('repositionBall moves a stuck ball to a free, playable spot', () => {
     const p = new Physics();
     p.ball.setPosition({ x: 0.25, y: 0.25 });
@@ -88,7 +101,7 @@ describe('physics', () => {
     }
   });
 
-  it('once the goals are closed the ball stays in the net', () => {
+  it('a scored ball settles inside the net and does not come back out', () => {
     const p = new Physics();
     p.setKeeperY(0, 100);
     p.ball.setPosition({ x: 2, y: 2.1 });
@@ -96,7 +109,7 @@ describe('physics', () => {
     let goal: number | null = null;
     for (let i = 0; i < 120 && goal === null; i++) { p.step(1 / 60); goal = p.ballInGoal(); }
     expect(goal).toBe(0);
-    p.closeGoals(true);
+    p.freezeButtons();
     run(p, 3);
     const x = p.ballPos().x;
     expect(x).toBeLessThan(0);

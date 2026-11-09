@@ -100,24 +100,64 @@ test('a called shot into an open goal scores', async ({ page }) => {
 test.describe('vs computer', () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test('CPU takes its turn on its own and the human gets the board back', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(String(e)));
+  test('the level picker offers three levels, remembers the choice and labels the CPU', async ({ page }) => {
     await page.goto('./');
-    await page.click('#ov-btn2'); // "Contra o computador"
-    expect(await dbg(page, (d) => (d as unknown as { vsCpu: boolean }).vsCpu)).toBe(true);
-    // human misses the ball, so it becomes the CPU's turn
+    await page.click('#ov-btn2'); // "Contra o computador" -> level picker
+    await expect(page.locator('#ov-title')).toHaveText('Escolha a dificuldade');
+    await expect(page.locator('#ov-btn')).toHaveText('Fácil');
+    await expect(page.locator('#ov-btn2')).toHaveText('Médio');
+    await expect(page.locator('#ov-btn3')).toHaveText('Difícil');
+    await page.screenshot({ path: 'test-results/level-picker.png' });
+    await page.click('#ov-btn'); // Fácil
+    await expect(page.locator('#overlay')).toBeHidden();
+    await expect(page.locator('#name1')).toContainText('Fácil');
+    expect(await dbg(page, (d) => (d as unknown as { cpuLevel: string }).cpuLevel)).toBe('easy');
+    expect(await page.evaluate(() => localStorage.getItem('botao-level'))).toBe('easy');
+    // reload: the picker highlights the last used level and "back" returns to the menu
+    await page.reload();
+    await page.click('#ov-btn2');
+    await expect(page.locator('#ov-btn')).not.toHaveClass(/alt/); // Fácil is the highlighted one
+    await page.click('#ov-back');
+    await expect(page.locator('#ov-title')).toHaveText('Mesa de Botão');
+  });
+
+  for (const level of [['#ov-btn', 'easy'], ['#ov-btn2', 'medium'], ['#ov-btn3', 'hard']] as const) {
+    test(`CPU (${level[1]}) takes its turn on its own and the human gets the board back`, async ({ page }) => {
+      test.setTimeout(90_000); // the CPU may take up to 3 flicks in a row
+      const errors: string[] = [];
+      page.on('pageerror', (e) => errors.push(String(e)));
+      await page.goto('./');
+      await page.click('#ov-btn2');
+      await page.click(level[0]);
+      expect(await dbg(page, (d) => (d as unknown as { cpuLevel: string }).cpuLevel)).toBe(level[1]);
+      // human misses the ball, so it becomes the CPU's turn
+      await flick(page, 0, 0, 0, -1.2);
+      await expect.poll(() => dbg(page, (d) => d.state.turn), { timeout: 15_000 }).toBe(1);
+      // the human cannot pick up the CPU's buttons
+      const p = await pos(page, 1, 2);
+      const s = await toScreen(page, p.x, p.y);
+      await page.mouse.move(s.x, s.y); await page.mouse.down(); await page.mouse.move(s.x + 40, s.y + 40, { steps: 3 });
+      await page.screenshot({ path: `test-results/vs-cpu-${level[1]}-cpu-turn.png` });
+      await page.mouse.up();
+      // ...and the CPU flicks by itself; the turn comes back to the human after it settles
+      await expect.poll(async () => (await dbg(page, (d) => d.state.phase)) === 'aim' && (await dbg(page, (d) => d.state.turn)) === 0, { timeout: 40_000 }).toBe(true);
+      expect(errors).toEqual([]);
+    });
+  }
+
+  test('the hard CPU keeps the page responsive while it thinks', async ({ page }) => {
+    await page.goto('./');
+    await page.click('#ov-btn2');
+    await page.click('#ov-btn3');
     await flick(page, 0, 0, 0, -1.2);
     await expect.poll(() => dbg(page, (d) => d.state.turn), { timeout: 15_000 }).toBe(1);
-    // the human cannot pick up the CPU's buttons
-    const p = await pos(page, 1, 2);
-    const s = await toScreen(page, p.x, p.y);
-    await page.mouse.move(s.x, s.y); await page.mouse.down(); await page.mouse.move(s.x + 40, s.y + 40, { steps: 3 });
-    await page.screenshot({ path: 'test-results/vs-cpu-cpu-turn.png' });
-    await page.mouse.up();
-    // ...and the CPU flicks by itself; the turn comes back to the human after it settles
-    await expect.poll(async () => (await dbg(page, (d) => d.state.phase)) === 'aim' && (await dbg(page, (d) => d.state.turn)) === 0, { timeout: 25_000 }).toBe(true);
-    expect(errors).toEqual([]);
+    // sample frame gaps while the CPU is searching
+    const worst = await page.evaluate(() => new Promise<number>((resolve) => {
+      let last = performance.now(), worst = 0, frames = 0;
+      const tick = (now: number) => { worst = Math.max(worst, now - last); last = now; if (++frames < 45) requestAnimationFrame(tick); else resolve(worst); };
+      requestAnimationFrame(tick);
+    }));
+    expect(worst).toBeLessThan(250); // no long freezes (generous: CI machines are slow)
   });
 });
 

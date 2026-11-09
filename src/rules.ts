@@ -1,8 +1,8 @@
-import { FLICKS_PER_TURN, WIN_SCORE, other, type Team } from './config';
+import { CHARGE_MAX, FLICKS_PER_TURN, WIN_SCORE, other, type Team } from './config';
 
 export type Phase = 'aim' | 'keeper' | 'moving' | 'goal' | 'over';
 export type ResetKind = 'none' | 'kickoff' | 'goalkick';
-export type NoticeKey = 'goal' | 'ownGoal' | 'noGoal' | 'foul' | 'again' | 'miss' | 'limit';
+export type NoticeKey = 'goal' | 'ownGoal' | 'noGoal' | 'foul' | 'again' | 'miss' | 'limit' | 'superReady';
 
 export interface Notice {
   key: NoticeKey;
@@ -13,6 +13,7 @@ export interface Notice {
 export type ContactInfo =
   | { kind: 'button'; team: Team; idx: number }
   | { kind: 'keeper'; team: Team }
+  | { kind: 'wall' }
   | { kind: 'ball' };
 
 export interface GameState {
@@ -24,6 +25,10 @@ export interface GameState {
   declared: boolean;
   ballTouched: boolean;
   foul: boolean;
+  /** Ball touches banked per team; at CHARGE_MAX the next flick is a super flick. */
+  charge: [number, number];
+  /** The flick currently in motion is a super flick. */
+  superActive: boolean;
   winner: Team | null;
   reset: ResetKind;
   /** Team whose goal the ball is reset in front of on a goal kick. */
@@ -40,6 +45,8 @@ export function newGame(first: Team = 0): GameState {
     declared: false,
     ballTouched: false,
     foul: false,
+    charge: [0, 0],
+    superActive: false,
     winner: null,
     reset: 'kickoff',
     resetDefender: first,
@@ -66,6 +73,8 @@ export function startFlick(s: GameState): boolean {
   if (s.phase !== 'aim') return false;
   s.phase = 'moving';
   s.flicksLeft -= 1;
+  s.superActive = s.charge[s.turn] >= CHARGE_MAX;
+  if (s.superActive) s.charge[s.turn] = 0;
   s.ballTouched = false;
   s.foul = false;
   s.notice = null;
@@ -96,6 +105,7 @@ function passTurn(s: GameState, key: NoticeKey): void {
 /** The ball fully crossed the line of `defender`'s goal. */
 export function goalReached(s: GameState, defender: Team): void {
   if (s.phase !== 'moving') return;
+  s.superActive = false;
   const attacker = other(defender);
   const own = defender === s.turn;
   const valid = own || (s.declared && !s.foul);
@@ -128,8 +138,14 @@ export function goalReached(s: GameState, defender: Team): void {
 export function settle(s: GameState): void {
   if (s.phase !== 'moving') return;
   s.declared = false;
+  s.superActive = false;
+  if (s.ballTouched && !s.foul) {
+    const before = s.charge[s.turn];
+    s.charge[s.turn] = Math.min(CHARGE_MAX, before + 1);
+  }
+  const justCharged = s.charge[s.turn] >= CHARGE_MAX && s.ballTouched && !s.foul;
   if (s.foul) passTurn(s, 'foul');
-  else if (s.ballTouched && s.flicksLeft > 0) s.notice = { key: 'again', team: s.turn };
+  else if (s.ballTouched && s.flicksLeft > 0) s.notice = { key: justCharged ? 'superReady' : 'again', team: s.turn };
   else passTurn(s, s.ballTouched ? 'limit' : 'miss');
   s.phase = 'aim';
 }

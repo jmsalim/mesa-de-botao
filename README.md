@@ -11,6 +11,10 @@ Futebol de botão in the browser: two players share one phone or laptop and take
 - Hit an opponent's button before the ball and it's a **foul**: the turn passes.
 - To score, tap **Chutar ao gol / Shoot!** first. Your opponent then gets a few seconds to slide their keeper along the goal line, and you flick. Goals that weren't called don't count (goal kick for the defender). Own goals always count for the opponent.
 - First to 3 goals wins. The team that conceded kicks off.
+- **⚡ Super Flick:** every flick that touches the ball charges a bolt. At 3 bolts your buttons glow and your next flick is a heavy, faster fireball.
+- While dragging, a dotted line shows how far the button will slide, where the ball will be sent, and turns red if you'd foul.
+- **Vs computer:** pick it on the start screen to play alone against the CPU (red).
+- Sound effects are synthesized in code (mute with the speaker chip); phones also get small vibrations on big hits and goals.
 - Portuguese and English UI, switch with the chip at the bottom right.
 
 ## Develop
@@ -30,6 +34,7 @@ If Playwright can't find its browser locally, run `npx playwright install chromi
 - Vite + TypeScript, no framework. All art is drawn with Canvas 2D (no image assets).
 - [Planck.js](https://github.com/piqnt/planck.js) (a Box2D port) for physics: continuous collision detection keeps hard flicks from tunnelling through the ball or walls.
 - `src/rules.ts` is a pure state machine (turns, fouls, called shots, goals) with no physics or DOM, so it is unit-tested on its own.
+- `src/ai.ts` is the CPU opponent (pure function, unit-tested); `src/fx.ts` and `src/audio.ts` are the particles, shake and synthesized sound.
 - Field is simulated in landscape; portrait screens rotate the view and input.
 
 ## Deployment

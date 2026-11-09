@@ -1,6 +1,6 @@
 import * as planck from 'planck';
 import {
-  BALL_R, BUTTON_R, FIELD, KEEPER_RANGE, KEEPER_SIZE, KEEPER_X, MAX_BALL_SPEED, other, type Team,
+  BALL_R, BUTTON_R, FIELD, KEEPER_RANGE, KEEPER_SIZE, KEEPER_X, MAX_BALL_SPEED, BUTTON_DAMPING, SUPER_DENSITY, other, type Team,
 } from './config';
 import type { ContactInfo } from './rules';
 
@@ -25,6 +25,9 @@ export class Physics {
   keepers: planck.Body[] = [];
   ball!: planck.Body;
   onContact: (a: ContactInfo, b: ContactInfo) => void = () => {};
+  /** Fired for every new contact with the closing speed and contact point (for sound and effects). */
+  onImpact: (a: ContactInfo, b: ContactInfo, speed: number, x: number, y: number) => void = () => {};
+  private superBody: planck.Body | null = null;
   private acc = 0;
   /** Seconds all bodies have been (almost) still. */
   stillFor = 0;
@@ -39,7 +42,13 @@ export class Physics {
     this.world.on('begin-contact', (c) => {
       const a = c.getFixtureA().getBody().getUserData() as ContactInfo | null;
       const b = c.getFixtureB().getBody().getUserData() as ContactInfo | null;
-      if (a && b) this.onContact(a, b);
+      if (!a || !b) return;
+      const bA = c.getFixtureA().getBody(), bB = c.getFixtureB().getBody();
+      const speed = Vec2.sub(bA.getLinearVelocity(), bB.getLinearVelocity()).length();
+      const wm = c.getWorldManifold(null);
+      const pt = wm && wm.points[0] ? wm.points[0] : bA.getPosition();
+      this.onContact(a, b);
+      this.onImpact(a, b, speed, pt.x, pt.y);
     });
     this.resetKickoff();
   }
@@ -47,7 +56,7 @@ export class Physics {
   private buildWalls(): void {
     const { L, W, goalW, goalD } = FIELD;
     const t = 0.5; // wall half-thickness
-    const body = this.world.createBody({ type: 'static', position: Vec2(0, 0) });
+    const body = this.world.createBody({ type: 'static', position: Vec2(0, 0), userData: { kind: 'wall' } satisfies ContactInfo });
     const opt = { friction: 0, restitution: 0.65, filterCategoryBits: CAT.WALL };
     const box = (hx: number, hy: number, cx: number, cy: number) =>
       body.createFixture(planck.Box(hx, hy, Vec2(cx, cy), 0), opt);
@@ -74,7 +83,7 @@ export class Physics {
 
   private makeButton(team: Team, idx: number): planck.Body {
     const b = this.world.createBody({
-      type: 'dynamic', bullet: true, linearDamping: 4.2, fixedRotation: true,
+      type: 'dynamic', bullet: true, linearDamping: BUTTON_DAMPING, fixedRotation: true,
       userData: { kind: 'button', team, idx } satisfies ContactInfo,
     });
     b.createFixture(planck.Circle(BUTTON_R), {
@@ -160,8 +169,14 @@ export class Physics {
     return this.keepers[team].getPosition().y;
   }
 
-  flick(team: Team, idx: number, vx: number, vy: number): void {
+  flick(team: Team, idx: number, vx: number, vy: number, sup = false): void {
     const b = this.buttons[team][idx];
+    if (sup) {
+      // a super flick is a heavy button: it carries far more momentum into the ball
+      b.getFixtureList()!.setDensity(SUPER_DENSITY);
+      b.resetMassData();
+      this.superBody = b;
+    }
     b.setLinearVelocity(Vec2(vx, vy));
     b.setAwake(true);
     this.stillFor = 0;
@@ -195,9 +210,18 @@ export class Physics {
     return this.stillFor > 0.2;
   }
 
+  /** Back to normal weight after a super flick. */
+  endSuper(): void {
+    if (!this.superBody) return;
+    this.superBody.getFixtureList()!.setDensity(1);
+    this.superBody.resetMassData();
+    this.superBody = null;
+  }
+
   /** Stop everything (safety net if something keeps jittering). */
   freeze(): void {
     for (const b of [...this.allButtons(), this.ball]) b.setLinearVelocity(Vec2(0, 0));
+    this.endSuper();
   }
 
   /** Team whose goal the ball has fully crossed into, if any. */

@@ -91,3 +91,46 @@ test('a called shot into an open goal scores', async ({ page }) => {
   await expect.poll(() => dbg(page, (d) => d.state.phase), { timeout: 10_000 }).toBe('aim');
   expect(await dbg(page, (d) => d.state.turn)).toBe(1);
 });
+
+test.describe('vs computer', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('CPU takes its turn on its own and the human gets the board back', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    await page.goto('./');
+    await page.click('#ov-btn2'); // "Contra o computador"
+    expect(await dbg(page, (d) => (d as unknown as { vsCpu: boolean }).vsCpu)).toBe(true);
+    // human misses the ball, so it becomes the CPU's turn
+    await flick(page, 0, 0, 0, -1.2);
+    await expect.poll(() => dbg(page, (d) => d.state.turn), { timeout: 15_000 }).toBe(1);
+    // the human cannot pick up the CPU's buttons
+    const p = await pos(page, 1, 2);
+    const s = await toScreen(page, p.x, p.y);
+    await page.mouse.move(s.x, s.y); await page.mouse.down(); await page.mouse.move(s.x + 40, s.y + 40, { steps: 3 });
+    await page.screenshot({ path: 'test-results/vs-cpu-cpu-turn.png' });
+    await page.mouse.up();
+    // ...and the CPU flicks by itself; the turn comes back to the human after it settles
+    await expect.poll(async () => (await dbg(page, (d) => d.state.phase)) === 'aim' && (await dbg(page, (d) => d.state.turn)) === 0, { timeout: 25_000 }).toBe(true);
+    expect(errors).toEqual([]);
+  });
+});
+
+test('aim preview and super charge render without errors', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('./');
+  await page.click('#ov-btn');
+  await page.evaluate(() => { (window as unknown as { __botao: { state: { charge: number[] } } }).__botao.state.charge[0] = 3; });
+  const p = await pos(page, 0, 2);
+  const from = await toScreen(page, p.x, p.y);
+  const to = await toScreen(page, p.x - 1.2, p.y + 0.9);
+  await page.mouse.move(from.x, from.y); await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 6 });
+  await page.screenshot({ path: 'test-results/aim-preview.png' });
+  await page.mouse.up();
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: 'test-results/super-flick.png' });
+  expect(errors).toEqual([]);
+});

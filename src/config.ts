@@ -19,7 +19,13 @@ export const KEEPER_RANGE = (FIELD.goalW - KEEPER_SIZE.w) / 2 - 0.02;
 export const MAX_PULL = 2.0;
 export const MIN_PULL = 0.2;
 export const MAX_SPEED = 13;
-export const MAX_BALL_SPEED = 17;
+export const MAX_BALL_SPEED = 22;
+/** Button sliding friction (matches physics linearDamping), used for aim preview. */
+export const BUTTON_DAMPING = 4.4;
+/** Ball touches needed to charge a super flick. */
+export const CHARGE_MAX = 3;
+export const SUPER_SPEED_MUL = 1.3;
+export const SUPER_DENSITY = 4;
 
 export const WIN_SCORE = 3;
 export const FLICKS_PER_TURN = 3;

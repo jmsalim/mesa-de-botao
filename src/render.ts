@@ -1,4 +1,5 @@
-import { BALL_R, BUTTON_R, FIELD, KEEPER_SIZE, MAX_PULL, MIN_PULL, other, type Team } from './config';
+import { BALL_R, BUTTON_DAMPING, BUTTON_R, CHARGE_MAX, FIELD, KEEPER_SIZE, MAX_PULL, MAX_SPEED, MIN_PULL, SUPER_SPEED_MUL, other, type Team } from './config';
+import type { Fx } from './fx';
 import type { Layout } from './layout';
 import type { Physics } from './physics';
 import type { GameState } from './rules';
@@ -17,6 +18,9 @@ export interface Scene {
   state: GameState;
   drag: Drag | null;
   time: number;
+  fx: Fx;
+  /** 1 = normal speed, <1 during slow-motion */
+  timeScale: number;
 }
 
 const PALETTE = {
@@ -202,6 +206,59 @@ function drawBall(ctx: CanvasRenderingContext2D, x: number, y: number): void {
   ctx.beginPath(); ctx.arc(x - R * 0.35, y - R * 0.38, R * 0.18, 0, Math.PI * 2); ctx.fill();
 }
 
+interface Prediction {
+  /** where the button's centre ends up (first hit, or where it runs out of steam) */
+  endX: number; endY: number;
+  hit: 'ball' | 'foul' | 'own' | 'wall' | null;
+  /** ball launch direction if the first thing hit is the ball */
+  ballDir: { x: number; y: number } | null;
+  bounce: { x: number; y: number } | null;
+}
+
+/** Ray-march the flick: first thing the button would touch within its reach. */
+function predict(scene: Scene, drag: Drag, ux: number, uy: number, reach: number): Prediction {
+  const { phys } = scene;
+  const b = phys.buttons[drag.team][drag.idx].getPosition();
+  let bestT = reach;
+  let hit: Prediction['hit'] = null;
+  let ballDir: Prediction['ballDir'] = null;
+  const circle = (cx: number, cy: number, r: number): number | null => {
+    const mx = b.x - cx, my = b.y - cy;
+    const bb = mx * ux + my * uy, c = mx * mx + my * my - r * r;
+    if (c > 0 && bb > 0) return null;
+    const disc = bb * bb - c;
+    if (disc < 0) return null;
+    const t = -bb - Math.sqrt(disc);
+    return t >= 0 ? t : null;
+  };
+  const bp = phys.ballPos();
+  const tBall = circle(bp.x, bp.y, BUTTON_R + BALL_R);
+  if (tBall !== null && tBall < bestT) { bestT = tBall; hit = 'ball'; }
+  for (const team of [0, 1] as Team[]) {
+    phys.buttons[team].forEach((o, i) => {
+      if (team === drag.team && i === drag.idx) return;
+      const p = o.getPosition();
+      const t = circle(p.x, p.y, BUTTON_R * 2);
+      if (t !== null && t < bestT) { bestT = t; hit = team === drag.team ? 'own' : 'foul'; }
+    });
+  }
+  const { L, W } = FIELD;
+  const tx = ux > 1e-6 ? (L - BUTTON_R - b.x) / ux : ux < -1e-6 ? (BUTTON_R - b.x) / ux : Infinity;
+  const ty = uy > 1e-6 ? (W - BUTTON_R - b.y) / uy : uy < -1e-6 ? (BUTTON_R - b.y) / uy : Infinity;
+  const tw = Math.min(tx, ty);
+  let bounce: Prediction['bounce'] = null;
+  if (tw < bestT) {
+    bestT = tw; hit = 'wall';
+    bounce = tx < ty ? { x: -ux, y: uy } : { x: ux, y: -uy };
+  }
+  const ex = b.x + ux * bestT, ey = b.y + uy * bestT;
+  if (hit === 'ball') {
+    const dx = bp.x - ex, dy = bp.y - ey, l = Math.hypot(dx, dy) || 1;
+    ballDir = { x: dx / l, y: dy / l };
+  }
+  return { endX: ex, endY: ey, hit, ballDir, bounce };
+}
+
 function drawAim(ctx: CanvasRenderingContext2D, scene: Scene, drag: Drag): void {
   const b = scene.phys.buttons[drag.team][drag.idx].getPosition();
   let dx = b.x - drag.px, dy = b.y - drag.py;
@@ -210,27 +267,66 @@ function drawAim(ctx: CanvasRenderingContext2D, scene: Scene, drag: Drag): void 
   const power = clamped / MAX_PULL;
   const live = len >= MIN_PULL;
   if (len > 1e-6) { dx /= len; dy /= len; }
-  // pull line to finger
+  const hue = 120 - 120 * power;
+  const sup = scene.state.charge[drag.team] >= CHARGE_MAX;
+
+  // elastic band back to the finger
   ctx.save();
   ctx.setLineDash([0.08, 0.1]); ctx.lineCap = 'round';
   ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 0.05;
   ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - dx * clamped, b.y - dy * clamped); ctx.stroke();
   ctx.restore();
   if (!live) return;
-  // power ring
-  ctx.strokeStyle = `hsl(${120 - 120 * power},85%,58%)`; ctx.lineWidth = 0.07; ctx.lineCap = 'round';
+
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = `hsl(${hue},85%,58%)`; ctx.lineWidth = 0.07;
   ctx.beginPath(); ctx.arc(b.x, b.y, BUTTON_R + 0.12, -Math.PI / 2, -Math.PI / 2 + power * Math.PI * 2); ctx.stroke();
-  // direction arrow
-  const start = BUTTON_R + 0.2, alen = start + 0.5 + power * 2.2;
-  const ex = b.x + dx * alen, ey = b.y + dy * alen, sx = b.x + dx * start, sy = b.y + dy * start;
-  ctx.strokeStyle = `hsl(${120 - 120 * power},90%,60%)`; ctx.fillStyle = ctx.strokeStyle;
-  ctx.lineWidth = 0.09;
-  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex - dx * 0.1, ey - dy * 0.1); ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(ex, ey);
-  ctx.lineTo(ex - dx * 0.28 - dy * 0.17, ey - dy * 0.28 + dx * 0.17);
-  ctx.lineTo(ex - dx * 0.28 + dy * 0.17, ey - dy * 0.28 - dx * 0.17);
-  ctx.closePath(); ctx.fill();
+
+  // preview: how far this flick slides, and what it would hit first
+  const speed = power * MAX_SPEED * (sup ? SUPER_SPEED_MUL : 1);
+  const reach = (speed / BUTTON_DAMPING) * 0.93;
+  const pr = predict(scene, drag, dx, dy, reach);
+  const warn = pr.hit === 'foul';
+  const col = warn ? '#ff4d4d' : `hsl(${hue},90%,62%)`;
+  ctx.save();
+  ctx.setLineDash([0.07, 0.13]); ctx.strokeStyle = col; ctx.lineWidth = 0.065; ctx.globalAlpha = 0.95;
+  ctx.beginPath(); ctx.moveTo(b.x + dx * (BUTTON_R + 0.1), b.y + dy * (BUTTON_R + 0.1)); ctx.lineTo(pr.endX, pr.endY); ctx.stroke();
+  if (pr.bounce) {
+    const rest = Math.max(0, reach - Math.hypot(pr.endX - b.x, pr.endY - b.y)) * 0.6;
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath(); ctx.moveTo(pr.endX, pr.endY); ctx.lineTo(pr.endX + pr.bounce.x * Math.min(rest, 1.4), pr.endY + pr.bounce.y * Math.min(rest, 1.4)); ctx.stroke();
+  }
+  ctx.restore();
+  // ghost button where it will stop or collide
+  ctx.strokeStyle = col; ctx.lineWidth = 0.05; ctx.globalAlpha = 0.9;
+  ctx.beginPath(); ctx.arc(pr.endX, pr.endY, BUTTON_R, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalAlpha = 1;
+  if (warn) { // red cross: you would hit an opponent first (foul)
+    ctx.strokeStyle = '#ff4d4d'; ctx.lineWidth = 0.09;
+    const c = BUTTON_R * 0.5;
+    ctx.beginPath(); ctx.moveTo(pr.endX - c, pr.endY - c); ctx.lineTo(pr.endX + c, pr.endY + c);
+    ctx.moveTo(pr.endX + c, pr.endY - c); ctx.lineTo(pr.endX - c, pr.endY + c); ctx.stroke();
+  }
+  if (pr.hit === 'ball' && pr.ballDir) { // where the ball will be sent
+    const bp = scene.phys.ballPos(), l = 0.7 + power * 1.8;
+    const ex = bp.x + pr.ballDir.x * l, ey = bp.y + pr.ballDir.y * l, a = pr.ballDir;
+    ctx.strokeStyle = '#fff3c4'; ctx.fillStyle = '#fff3c4'; ctx.lineWidth = 0.06;
+    ctx.beginPath(); ctx.moveTo(bp.x + a.x * 0.2, bp.y + a.y * 0.2); ctx.lineTo(ex, ey); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ex + a.x * 0.2, ey + a.y * 0.2);
+    ctx.lineTo(ex - a.y * 0.13, ey + a.x * 0.13); ctx.lineTo(ex + a.y * 0.13, ey - a.x * 0.13); ctx.closePath(); ctx.fill();
+  }
+}
+
+function drawAura(ctx: CanvasRenderingContext2D, x: number, y: number, time: number): void {
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(time * 1.6);
+  ctx.strokeStyle = 'rgba(255,215,94,0.9)'; ctx.lineWidth = 0.05; ctx.lineCap = 'round';
+  for (let i = 0; i < 8; i++) {
+    ctx.rotate(Math.PI / 4);
+    const r0 = BUTTON_R + 0.1 + 0.03 * Math.sin(time * 8 + i), r1 = r0 + 0.14;
+    ctx.beginPath(); ctx.moveTo(r0, 0); ctx.lineTo(r1, 0); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 export function render(ctx: CanvasRenderingContext2D, l: Layout, dpr: number, scene: Scene): void {
@@ -239,9 +335,10 @@ export function render(ctx: CanvasRenderingContext2D, l: Layout, dpr: number, sc
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   ctx.setTransform(a * dpr, b * dpr, c * dpr, d * dpr, e * dpr, f * dpr);
 
+  const { phys, state, drag, time, fx } = scene;
+  const sh = fx.shakeOffset(time);
+  ctx.translate(sh.x, sh.y);
   drawTable(ctx);
-
-  const { phys, state, drag, time } = scene;
   const pulse = 0.5 + 0.5 * Math.sin(time * 5);
 
   // goal being shot at glows once the shot has been called
@@ -266,7 +363,28 @@ export function render(ctx: CanvasRenderingContext2D, l: Layout, dpr: number, sc
       drawButton(ctx, p.x, p.y, team, active ? pulse : 0);
     });
   }
+  // super-charged team: spinning golden aura on its buttons
+  for (const team of [0, 1] as Team[]) {
+    if (state.charge[team] >= CHARGE_MAX && !(state.phase === 'moving' && state.turn === team && state.superActive)) {
+      for (const body of phys.buttons[team]) { const p = body.getPosition(); drawAura(ctx, p.x, p.y, time); }
+    }
+  }
+  fx.drawTrails(ctx);
   const bp = phys.ballPos();
   drawBall(ctx, bp.x, bp.y);
   if (drag && drag.kind === 'aim') drawAim(ctx, scene, drag);
+  fx.drawParticles(ctx);
+
+  // screen-space overlays: impact flash and slow-motion vignette
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (fx.flash > 0) {
+    ctx.fillStyle = `rgba(${fx.flashColor},${Math.min(0.6, fx.flash * 0.6)})`;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  }
+  if (scene.timeScale < 0.9) {
+    const w = ctx.canvas.width, h = ctx.canvas.height;
+    const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.25, w / 2, h / 2, Math.max(w, h) * 0.75);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${(1 - scene.timeScale) * 0.7})`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  }
 }

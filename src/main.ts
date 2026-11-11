@@ -248,6 +248,8 @@ function updateHud(): void {
   freeBtn.textContent = '↻ ' + s.freeBall;
   freeBtn.hidden = !canFree;
   $('mute').textContent = audio.isMuted() ? '🔇' : '🔊';
+  $('ov-sound').textContent = audio.isMuted() ? `🔇 ${s.soundOff}` : `🔊 ${s.soundOn}`;
+  $('ov-sound').setAttribute('aria-pressed', String(audio.isMuted()));
   bolts($('ch0'), state.charge[0]);
   bolts($('ch1'), state.charge[1]);
   const turnText = $('turn-text');
@@ -306,11 +308,14 @@ $('lang').addEventListener('click', () => {
   if (!overlay.hidden) showOverlay(overlayKind);
   if (lastNotice) toast.textContent = noticeText(lastNotice);
 });
-$('mute').addEventListener('click', () => {
+/** One setting, two switches: the footer speaker chip and the button in the menu card. */
+function toggleSound(): void {
   audio.setMuted(!audio.isMuted());
-  audio.click();
+  if (!audio.isMuted()) audio.click();
   hudSig = '';
-});
+}
+$('mute').addEventListener('click', toggleSound);
+$('ov-sound').addEventListener('click', toggleSound);
 
 function startGame(cpu: boolean, level?: Level): void {
   if (state.phase === 'over' || overlayKind === 'over') restart();

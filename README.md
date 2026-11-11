@@ -20,7 +20,7 @@ Futebol de botão in the browser: two players share one phone or laptop and take
   - **Médio / Medium:** plays clean (avoids fouls and its own keeper), calls its shots.
   - **Difícil / Hard:** tries ~30 flicks on a hidden copy of the table and plays the best outcome (defence included), reads shot lines with its keeper, and uses the Super Flick.
 - **Real-table look:** felt field, and pieces in your choice of **pérola, tartaruga, acrílico or mármore** (pick on the start screen; teams are named after their material). The menu uses the table illustration on paper.
-- **Real-table sound:** recorded flick, disc, ball, wall and net sounds, three whistles, a goal roar and a quiet crowd loop. Mute with the speaker chip; phones also get small vibrations on big hits and goals.
+- **Real-table sound:** recorded flick, disc, ball, wall and net sounds, three whistles, a goal roar and a soft stadium murmur underneath. The murmur swells on goals and dips under whistles. Sound on/off is a button in the menu card and a speaker chip in the footer (same setting, remembered); phones also get small vibrations on big hits and goals.
 - Portuguese and English UI, switch with the chip at the bottom right.
 
 ## Develop
@@ -33,6 +33,8 @@ npm run test:e2e   # headless Chromium smoke tests (Playwright)
 npm run test:balance  # ~80 s CPU-vs-CPU simulations: checks Fácil < Médio < Difícil, fouls and own goals
 npm run build      # type-check and build to dist/
 python3 scripts/optimize-assets.py   # shrink new art dropped in public/assets (only ever downscales)
+python3 scripts/make-crowd.py        # regenerate the crowd murmur (numpy + ffmpeg)
+python3 scripts/check-crowd.py public/assets/sounds/crowd-loop.mp3 --pad 0.2 --length 8   # loudness, brightness, loop seam
 ```
 
 If Playwright can't find its browser locally, run `npx playwright install chromium`, or set `CHROMIUM_PATH` to an existing Chromium binary.
@@ -49,6 +51,10 @@ If Playwright can't find its browser locally, run `npx playwright install chromi
 ## Art and sound
 
 Files live in `public/assets` (see its README for credits). They are kept small for phones: textures are 128–256 px WebP (about 10 KB for the felt, 1–4 KB per piece material), the table illustration is 43 KB, and sounds are loaded only after the first tap. A test checks every referenced file exists, that nothing unused is shipped, and the size budget. The first upload's full-size originals are in git history (commit `2f76ca1`).
+
+### The crowd murmur
+
+`crowd-loop.mp3` is synthesized by `scripts/make-crowd.py` (about 150 soft, unintelligible voices, a low rumble and a room tail, low-passed so almost nothing sits above 2.6 kHz where whistles and hits live). It repeats exactly every 8 s, and the file carries 0.2 s of that loop on each side, so the game loops the window `[0.2 s, 8.2 s]` with no seam however a browser's decoder shifts the audio. Gains are capped so no sound can clip, and the master has a limiter. `scripts/check-crowd.py` and the browser tests measure all of this.
 
 ## Deployment
 

@@ -179,3 +179,79 @@ test('aim preview and super charge render without errors', async ({ page }) => {
   await page.screenshot({ path: 'test-results/super-flick.png' });
   expect(errors).toEqual([]);
 });
+
+test.describe('real-table assets', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('all textures and images load with no failed requests, and the samples decode', async ({ page }) => {
+    const bad: string[] = [];
+    const seen: string[] = [];
+    page.on('response', (r) => { if (r.url().includes('/assets/')) { seen.push(r.url()); if (r.status() !== 200) bad.push(`${r.status()} ${r.url()}`); } });
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    await page.goto('./');
+    await expect.poll(() => dbg(page, (d) => (d as unknown as { texturesLoaded: boolean }).texturesLoaded), { timeout: 10_000 }).toBe(true);
+    await page.click('#ov-btn'); // the first tap unlocks audio and starts fetching the samples
+    await expect.poll(() => page.evaluate(() => (window as any).__botao.audio.samplesLoaded().length), { timeout: 15_000 }).toBe(10);
+    expect(bad).toEqual([]);
+    expect(seen.some((u) => u.endsWith('feltro.webp'))).toBe(true);
+    expect(seen.some((u) => u.endsWith('crowd-loop.mp3'))).toBe(true);
+    // the heavy-ish table illustration is only for the menu; sounds only after the first tap
+    expect(errors).toEqual([]);
+  });
+
+  test('the piece picker changes materials, swaps when you pick the other team\'s, and is remembered', async ({ page }) => {
+    await page.goto('./');
+    await expect(page.locator('#skins')).toBeVisible();
+    expect(await dbg(page, (d) => (d as unknown as { skins: string[] }).skins)).toEqual(['perolado', 'tartaruga']);
+    // team 2 picks acrylic
+    await page.locator('#sw1 .swatch').nth(2).click();
+    expect(await dbg(page, (d) => (d as unknown as { skins: string[] }).skins)).toEqual(['perolado', 'acrilico']);
+    // team 1 picks acrylic: taken by team 2, so they swap
+    await page.locator('#sw0 .swatch').nth(2).click();
+    expect(await dbg(page, (d) => (d as unknown as { skins: string[] }).skins)).toEqual(['acrilico', 'perolado']);
+    await expect(page.locator('#name0')).toHaveText('Acrílico');
+    await page.reload();
+    expect(await dbg(page, (d) => (d as unknown as { skins: string[] }).skins)).toEqual(['acrilico', 'perolado']);
+    await page.screenshot({ path: 'test-results/start-picker.png' });
+  });
+
+  for (const vp of [{ w: 390, h: 844 }, { w: 375, h: 667 }, { w: 320, h: 568 }]) {
+    test(`the start buttons and piece picker are on screen without scrolling (${vp.w}x${vp.h})`, async ({ page }) => {
+      await page.setViewportSize({ width: vp.w, height: vp.h });
+      await page.goto('./');
+      await expect(page.locator('#ov-btn')).toBeInViewport({ ratio: 1 });
+      await expect(page.locator('#ov-btn2')).toBeInViewport({ ratio: 1 });
+      await expect(page.locator('#skins')).toBeInViewport({ ratio: 1 });
+      // nothing makes the layout wider than the screen (it used to on 320 px phones)
+      const widths = await page.evaluate(() => ({ app: document.getElementById('app')!.getBoundingClientRect().width, card: document.querySelector('.card')!.getBoundingClientRect().right }));
+      expect(widths.app).toBeLessThanOrEqual(vp.w);
+      expect(widths.card).toBeLessThanOrEqual(vp.w);
+    });
+  }
+
+  test('recorded samples are what plays: flick, collisions, and a looping crowd', async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as { __starts: { d: number; loop: boolean }[] };
+      w.__starts = [];
+      const orig = AudioBufferSourceNode.prototype.start;
+      AudioBufferSourceNode.prototype.start = function (...a: Parameters<typeof orig>) {
+        w.__starts.push({ d: this.buffer ? +this.buffer.duration.toFixed(2) : 0, loop: this.loop });
+        return orig.apply(this, a);
+      };
+    });
+    await page.goto('./');
+    await page.click('#ov-btn');
+    await expect.poll(() => page.evaluate(() => (window as any).__botao.audio.samplesLoaded().length), { timeout: 15_000 }).toBe(10);
+    await flick(page, 0, 3, 1.3, -0.8); // team 1's front button at the ball: flick, then a collision
+    await expect.poll(() => dbg(page, (d) => d.state.phase), { timeout: 15_000 }).toBe('aim');
+    const starts = await page.evaluate(() => (window as any).__starts as { d: number; loop: boolean }[]);
+    // the crowd is an 8 s loop
+    expect(starts.some((x) => x.loop && x.d > 7 && x.d < 9)).toBe(true);
+    // short one-shot samples played (flick / disc-hit / ball-tap / wall-bounce are all under 0.3 s)...
+    const shots = starts.filter((x) => !x.loop && x.d > 0.05 && x.d < 0.3);
+    expect(shots.length).toBeGreaterThanOrEqual(2);
+    // ...and the 1 s synthesized noise fallback was not used for them
+    expect(starts.filter((x) => !x.loop && x.d === 1)).toEqual([]);
+  });
+});

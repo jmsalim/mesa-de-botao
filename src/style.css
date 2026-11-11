@@ -25,7 +25,7 @@ body {
 .team { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1rem; }
 .team.right { justify-content: flex-end; }
 .dot { width: 16px; height: 16px; border-radius: 50%; border: 3px solid rgba(0,0,0,.35); }
-.dot.t0 { background: var(--blue); } .dot.t1 { background: var(--red); }
+.dot.t0 { background: var(--skin0, #e6e9ef) center / cover; } .dot.t1 { background: var(--skin1, #8a4208) center / cover; }
 #score { font-size: 2rem; font-weight: 800; letter-spacing: .05em; display: flex; gap: 10px; align-items: baseline; }
 #score .sep { opacity: .5; }
 #lang { position: absolute; right: 12px; bottom: 18px; }
@@ -103,3 +103,76 @@ button.small { font-size: .9rem; padding: 8px 16px; border-radius: 12px; box-sha
 
 #ov-back { margin-top: 14px; }
 .btns button[hidden], #ov-back[hidden] { display: none; }
+
+/* ---------- real-table look: paper card, table illustration, material swatches ---------- */
+.dot { width: 18px; height: 18px; border: 2px solid rgba(0,0,0,.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,.35), 0 1px 3px rgba(0,0,0,.5); }
+.card {
+  background: #f4f1e9 var(--paper, none) repeat; background-size: 128px;
+  color: #2b1a10; border: 2px solid #b08a5a; box-shadow: 0 20px 50px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.6);
+}
+.card h1 { color: #7a3a05; text-shadow: 0 1px 0 rgba(255,255,255,.7); }
+.card p { color: #4a3322; opacity: 1; }
+.card ul { color: #2b1a10; }
+#hero {
+  height: clamp(84px, 20vh, 150px); margin: -6px -6px 12px; border-radius: 14px; border: 1px solid rgba(90,60,30,.35);
+  background: var(--hero) 78% 52% / cover no-repeat, #efe9da;
+}
+#hero[hidden] { display: none; }
+#ov-back { color: #4a3322; background: rgba(0,0,0,.06); border-color: rgba(0,0,0,.25); }
+#skins { margin: 0 0 14px; }
+#skins[hidden] { display: none; }
+#skins-title { font-size: .8rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #7a3a05; margin-bottom: 6px; }
+.skinrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 6px 0; }
+.skinlabel { font-weight: 700; font-size: .9rem; min-width: 4.5em; text-align: left; }
+.swatches { display: flex; gap: 8px; }
+.swatch {
+  width: 44px; height: 44px; border-radius: 50%; padding: 0; cursor: pointer; background-size: cover; background-position: center;
+  border: 3px solid rgba(0,0,0,.55); box-shadow: inset 0 0 0 2px rgba(255,255,255,.35), 0 2px 4px rgba(0,0,0,.35);
+}
+.swatch.sel { outline: 3px solid #f2b72f; outline-offset: 2px; }
+.swatch.taken:not(.sel) { opacity: .55; }
+@media (max-height: 640px) { #hero { display: none; } .swatch { width: 38px; height: 38px; } }
+
+#ov-details { margin-top: 14px; text-align: left; }
+#ov-details[hidden] { display: none; }
+#ov-summary { cursor: pointer; font-weight: 800; font-size: .9rem; color: #7a3a05; padding: 6px 0; list-style: none; text-align: center; }
+#ov-summary::-webkit-details-marker { display: none; }
+#ov-summary::before { content: '▸ '; } #ov-details[open] > #ov-summary::before { content: '▾ '; }
+#ov-details ul { margin: 6px 0 0; }
+.card ul { margin-bottom: 0; }
+
+/* very short phones (e.g. 320x568): keep the picker and both buttons on screen */
+@media (max-height: 600px) {
+  .card { padding: 10px 14px 12px; }
+  .card h1 { font-size: 1.5rem; margin: 0 0 2px; }
+  #ov-sub { display: none; }
+  #skins { margin-bottom: 8px; }
+  #skins-title { margin-bottom: 2px; }
+  .skinrow { margin: 3px 0; }
+  .swatch { width: 34px; height: 34px; }
+  .btns { gap: 6px; }
+  .btns button { min-width: 200px; padding: 8px 16px; font-size: .95rem; }
+  #ov-details { margin-top: 6px; }
+  #ov-summary { padding: 2px 0; }
+}
+
+/* the card never grows past the screen, whatever is inside it */
+#overlay { grid-template-columns: minmax(0, 1fr); }
+.card { min-width: 0; width: 100%; }
+.btns button { max-width: 100%; }
+.swatches { flex-wrap: nowrap; flex: 0 0 auto; }
+.skinlabel { min-width: 0; white-space: nowrap; }
+
+/* narrow phones: the layout never grows wider than the screen; long team names shorten with an ellipsis */
+#app { grid-template-columns: minmax(0, 1fr); }
+#hud { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.team { min-width: 0; }
+.tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+@media (max-width: 380px) {
+  #hud { padding-left: 8px; padding-right: 8px; gap: 4px 6px; }
+  .team { gap: 5px; font-size: .88rem; }
+  #score { font-size: 1.7rem; gap: 6px; }
+  .bolt { width: 7px; height: 11px; }
+  .charge { gap: 2px; }
+  .dot { width: 15px; height: 15px; }
+}

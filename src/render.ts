@@ -1,4 +1,5 @@
 import { BALL_R, BUTTON_DAMPING, BUTTON_R, CHARGE_MAX, FIELD, KEEPER_SIZE, MAX_PULL, MAX_SPEED, MIN_PULL, SUPER_SPEED_MUL, other, type Team } from './config';
+import { buttonPx, buttonSprite, feltPattern, keeperPx, keeperSprite, type Skin } from './assets';
 import type { Fx } from './fx';
 import type { Layout } from './layout';
 import type { Physics } from './physics';
@@ -21,7 +22,16 @@ export interface Scene {
   fx: Fx;
   /** 1 = normal speed, <1 during slow-motion */
   timeScale: number;
+  /** material of each team's pieces */
+  skins: [Skin, Skin];
+  /** device pixels per world unit, to size piece sprites 1:1 */
+  pxPerUnit: number;
+  /** rotation that keeps piece lighting upright on screen when the table is turned to portrait */
+  screenRot: number;
 }
+
+/** Per-frame drawing context for the piece helpers (set at the top of render()). */
+let cur: { skins: [Skin, Skin]; pxPerUnit: number; screenRot: number } = { skins: ['perolado', 'tartaruga'], pxPerUnit: 60, screenRot: 0 };
 
 const PALETTE = {
   0: { light: '#8ec0ff', main: '#2b6fd6', dark: '#123573', ring: '#e3efff' },
@@ -93,14 +103,18 @@ function drawTable(ctx: CanvasRenderingContext2D): void {
   // felt
   ctx.save();
   ctx.beginPath(); ctx.rect(0, 0, L, W); ctx.clip();
+  const felt = feltPattern(ctx);
   ctx.fillStyle = '#2f8a43'; ctx.fillRect(0, 0, L, W);
+  if (felt) { ctx.fillStyle = felt; ctx.fillRect(0, 0, L, W); } // real felt texture
   const stripes = 10;
   for (let i = 0; i < stripes; i++) {
-    ctx.fillStyle = i % 2 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+    ctx.fillStyle = i % 2 ? `rgba(255,255,255,${felt ? 0.035 : 0.05})` : `rgba(0,0,0,${felt ? 0.04 : 0.05})`;
     ctx.fillRect((L * i) / stripes, 0, L / stripes, W);
   }
-  for (const s of FELT_SPECKS) {
-    ctx.fillStyle = `rgba(255,255,255,${s.a})`; ctx.fillRect(s.x * L, s.y * W, 0.025, 0.025);
+  if (!felt) {
+    for (const s of FELT_SPECKS) {
+      ctx.fillStyle = `rgba(255,255,255,${s.a})`; ctx.fillRect(s.x * L, s.y * W, 0.025, 0.025);
+    }
   }
   // inner shadow along the rails
   const sh = ctx.createLinearGradient(0, 0, 0, 0.35);
@@ -165,13 +179,21 @@ function drawNet(ctx: CanvasRenderingContext2D, ball: { x: number; y: number }, 
   }
 }
 
-function drawButton(ctx: CanvasRenderingContext2D, x: number, y: number, team: Team, glow: number): void {
+function drawButton(ctx: CanvasRenderingContext2D, x: number, y: number, team: Team, idx: number, glow: number): void {
   const p = PALETTE[team], R = BUTTON_R;
   ctx.fillStyle = 'rgba(0,0,0,0.38)';
   ctx.beginPath(); ctx.arc(x + 0.05, y + 0.08, R * 1.02, 0, Math.PI * 2); ctx.fill();
   if (glow > 0) {
     ctx.strokeStyle = `rgba(255,236,140,${0.35 + 0.45 * glow})`; ctx.lineWidth = 0.07;
     ctx.beginPath(); ctx.arc(x, y, R + 0.07 + 0.03 * glow, 0, Math.PI * 2); ctx.stroke();
+  }
+  const sprite = buttonSprite(cur.skins[team], buttonPx(cur.pxPerUnit), idx);
+  if (sprite) {
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(cur.screenRot);
+    ctx.drawImage(sprite, -R, -R, R * 2, R * 2);
+    ctx.restore();
+    return;
   }
   const g = ctx.createRadialGradient(x - R * 0.35, y - R * 0.4, R * 0.1, x, y, R);
   g.addColorStop(0, p.light); g.addColorStop(0.55, p.main); g.addColorStop(1, p.dark);
@@ -196,6 +218,9 @@ function drawKeeper(ctx: CanvasRenderingContext2D, x: number, y: number, team: T
     ctx.strokeStyle = `rgba(255,236,140,${0.35 + 0.45 * glow})`; ctx.lineWidth = 0.07;
     roundRect(ctx, x - w / 2 - 0.07, y - h / 2 - 0.07, w + 0.14, h + 0.14, 0.13); ctx.stroke();
   }
+  const [kw, kh] = keeperPx(cur.pxPerUnit);
+  const ks = keeperSprite(cur.skins[team], kw, kh);
+  if (ks) { ctx.drawImage(ks, x - w / 2, y - h / 2, w, h); return; }
   const g = ctx.createLinearGradient(x - w / 2, 0, x + w / 2, 0);
   g.addColorStop(0, p.light); g.addColorStop(0.5, p.main); g.addColorStop(1, p.dark);
   ctx.fillStyle = g; roundRect(ctx, x - w / 2, y - h / 2, w, h, 0.08); ctx.fill();
@@ -216,14 +241,16 @@ function drawBall(ctx: CanvasRenderingContext2D, x: number, y: number): void {
   ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.beginPath(); ctx.arc(x + 0.04, y + 0.06, R * 1.05, 0, Math.PI * 2); ctx.fill();
   const g = ctx.createRadialGradient(x - R * 0.35, y - R * 0.4, R * 0.1, x, y, R);
-  g.addColorStop(0, '#f6dcaa'); g.addColorStop(0.6, '#c9975a'); g.addColorStop(1, '#7f5427');
+  g.addColorStop(0, '#ffffff'); g.addColorStop(0.6, '#e6e9ef'); g.addColorStop(1, '#9aa1ad');
   ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = 'rgba(70,40,15,0.55)';
-  for (let i = 0; i < 6; i++) {
-    const a = ballAngle + i * 1.05, r = R * (0.25 + 0.5 * ((i * 37) % 10) / 10);
-    ctx.beginPath(); ctx.arc(x + Math.cos(a) * r, y + Math.sin(a) * r, R * 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(40,48,60,0.45)'; ctx.lineWidth = 0.02;
+  ctx.beginPath(); ctx.arc(x, y, R - 0.01, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = 'rgba(60,68,82,0.45)'; // a few panels, turning as the ball rolls
+  for (let i = 0; i < 3; i++) {
+    const a = ballAngle + i * 2.1, r = R * 0.5;
+    ctx.beginPath(); ctx.arc(x + Math.cos(a) * r, y + Math.sin(a) * r, R * 0.2, 0, Math.PI * 2); ctx.fill();
   }
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.beginPath(); ctx.arc(x - R * 0.35, y - R * 0.38, R * 0.18, 0, Math.PI * 2); ctx.fill();
 }
 
@@ -357,6 +384,7 @@ export function render(ctx: CanvasRenderingContext2D, l: Layout, dpr: number, sc
   ctx.setTransform(a * dpr, b * dpr, c * dpr, d * dpr, e * dpr, f * dpr);
 
   const { phys, state, drag, time, fx } = scene;
+  cur = { skins: scene.skins, pxPerUnit: scene.pxPerUnit, screenRot: scene.screenRot };
   const sh = fx.shakeOffset(time);
   ctx.translate(sh.x, sh.y);
   drawTable(ctx);
@@ -381,7 +409,7 @@ export function render(ctx: CanvasRenderingContext2D, l: Layout, dpr: number, sc
     phys.buttons[team].forEach((body, idx) => {
       const p = body.getPosition();
       const active = canAim && team === state.turn && !(drag && drag.kind === 'aim' && drag.idx !== idx);
-      drawButton(ctx, p.x, p.y, team, active ? pulse : 0);
+      drawButton(ctx, p.x, p.y, team, idx, active ? pulse : 0);
     });
   }
   // super-charged team: spinning golden aura on its buttons

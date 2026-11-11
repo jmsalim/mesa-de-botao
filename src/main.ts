@@ -9,6 +9,7 @@ import { render, type Drag } from './render';
 import * as rules from './rules';
 import { getLang, setLang, t } from './i18n';
 import * as audio from './audio';
+import { DEFAULT_SKINS, SKINS, SKIN_COLORS, assetUrl, loaded, loadTextures, type Skin } from './assets';
 import { Fx } from './fx';
 import {
   LEVELS, LEVEL_ORDER, keeperTarget, planBasic, planHeuristic, withExecutionError, type AIView, type Level, type Plan,
@@ -50,8 +51,53 @@ let toastTimer = 0;
 /** Current phase, typed wide so TypeScript doesn't narrow it across rules calls. */
 const phaseNow = (): rules.Phase => state.phase;
 const cpuTurn = () => vsCpu && state.turn === CPU_TEAM;
+// ---------- piece materials ----------
+let skins: [Skin, Skin] = [...DEFAULT_SKINS];
+try {
+  const saved = JSON.parse(localStorage.getItem('botao-skins') ?? 'null') as unknown;
+  if (Array.isArray(saved) && saved.length === 2 && saved.every((x) => SKINS.includes(x as Skin)) && saved[0] !== saved[1]) skins = [saved[0] as Skin, saved[1] as Skin];
+} catch { /* storage may be unavailable */ }
+
+/** Teams are named after their pieces: Pérola, Tartaruga, Acrílico, Mármore. */
 const teamName = (team: Team) =>
-  (team === 0 ? t().team0 : t().team1) + (vsCpu && team === CPU_TEAM ? ` (${t().cpu} · ${t().levels[cpuLevel]})` : '');
+  t().skins[skins[team]] + (vsCpu && team === CPU_TEAM ? ` (${t().cpu} · ${t().levels[cpuLevel]})` : '');
+
+function applySkinVars(): void {
+  const root = document.documentElement.style;
+  root.setProperty('--paper', `url(${assetUrl('textures/papel.webp')})`);
+  root.setProperty('--hero', `url(${assetUrl('images/mesa.webp')})`);
+  skins.forEach((sk, i) => document.documentElement.style.setProperty(`--skin${i}`, `url(${assetUrl(`textures/${sk}.webp`)})`));
+}
+
+function renderSkinPicker(): void {
+  const box = $('skins');
+  box.hidden = overlayKind !== 'start';
+  $('hero').hidden = overlayKind !== 'start';
+  $('skins-title').textContent = t().pieces;
+  ([0, 1] as Team[]).forEach((team) => {
+    const row = $(`sw${team}`);
+    row.replaceChildren();
+    $(`skin-l${team}`).textContent = t().teamN(team + 1);
+    for (const sk of SKINS) {
+      const b = document.createElement('button');
+      b.className = 'swatch' + (skins[team] === sk ? ' sel' : '') + (skins[other(team)] === sk ? ' taken' : '');
+      b.style.backgroundImage = `url(${assetUrl(`textures/${sk}.webp`)})`;
+      b.setAttribute('aria-label', t().skins[sk]);
+      b.setAttribute('aria-pressed', String(skins[team] === sk));
+      b.title = t().skins[sk];
+      b.addEventListener('click', () => {
+        if (skins[team] === sk) return;
+        if (skins[other(team)] === sk) skins[other(team)] = skins[team]; // picking the other team's material swaps them
+        skins[team] = sk;
+        try { localStorage.setItem('botao-skins', JSON.stringify(skins)); } catch { /* ignore */ }
+        applySkinVars(); hudSig = '';
+        audio.click();
+        renderSkinPicker();
+      });
+      row.append(b);
+    }
+  });
+}
 
 // ---------- physics feedback: sound, sparks, shake, haptics ----------
 phys.onContact = (a, b) => {
@@ -153,6 +199,10 @@ function showOverlay(kind: 'start' | 'level' | 'over'): void {
   const list = $('ov-list');
   list.replaceChildren();
   const lines = kind === 'start' ? s.howto : kind === 'level' ? s.levelHelp : [];
+  const details = $<HTMLDetailsElement>('ov-details');
+  details.hidden = lines.length === 0;
+  details.open = kind === 'level'; // the how-to stays folded away so the buttons are always on screen
+  $('ov-summary').textContent = kind === 'level' ? s.levelsTitle : s.howToTitle;
   for (const line of lines) list.append(Object.assign(document.createElement('li'), { textContent: line }));
   const btn = [$('ov-btn'), $('ov-btn2'), $('ov-btn3')];
   if (kind === 'level') {
@@ -171,6 +221,8 @@ function showOverlay(kind: 'start' | 'level' | 'over'): void {
   $('ov-back').textContent = '← ' + s.back;
   $('ov-back').hidden = kind !== 'level';
   overlay.hidden = false;
+  renderSkinPicker();
+  audio.crowdOn(false);
 }
 
 function bolts(el: HTMLElement, n: number): void {
@@ -271,6 +323,8 @@ function startGame(cpu: boolean, level?: Level): void {
   overlay.hidden = true;
   hudSig = '';
   cpuReset();
+  audio.crowdOn(true);
+  audio.whistleStart();
 }
 $('ov-btn').addEventListener('click', () => {
   if (overlayKind === 'level') startGame(true, 'easy');
@@ -388,9 +442,7 @@ function cpuTick(dt: number): void {
 // ---------- loop ----------
 function celebrate(scorer: Team): void {
   const gx = scorer === 0 ? FIELD.L : 0;
-  const colors = scorer === 0
-    ? ['#2b6fd6', '#8ec0ff', '#ffffff', '#ffd75e']
-    : ['#d63b3b', '#ffa593', '#ffffff', '#ffd75e'];
+  const colors = SKIN_COLORS[skins[scorer]];
   fx.confetti(gx, FIELD.W / 2, 90, colors, scorer === 0 ? -1 : 1);
   fx.ring(gx, FIELD.W / 2, 1.4, '255,215,94');
   fx.addShake(0.24);
@@ -471,6 +523,7 @@ function frame(now: number): void {
         rules.resumeAfterGoal(state);
         hideToast();
         fx.ballTrail.length = 0;
+        audio.whistleStart();
       }
     } else if (state.phase === 'over') {
       phys.step(dt * timeScale);
@@ -491,10 +544,15 @@ function frame(now: number): void {
   afterRules();
   updateHud();
   fx.update(dt);
-  render(ctx, layout, dpr, { phys, state, drag: input.drag ?? cpuDrag, time: clock, fx, timeScale });
+  render(ctx, layout, dpr, {
+    phys, state, drag: input.drag ?? cpuDrag, time: clock, fx, timeScale,
+    skins, pxPerUnit: layout.scale * dpr, screenRot: layout.portrait ? Math.PI / 2 : 0,
+  });
   requestAnimationFrame(frame);
 }
 
+applySkinVars();
+void loadTextures(); // small, and the game draws a code-made look until they arrive
 resize();
 showOverlay('start');
 requestAnimationFrame(frame);
@@ -504,6 +562,9 @@ requestAnimationFrame(frame);
   get state() { return state; },
   get vsCpu() { return vsCpu; },
   get cpuLevel() { return cpuLevel; },
+  get skins() { return skins; },
+  get texturesLoaded() { return !!loaded.felt && SKINS.every((k) => !!loaded.skins[k]); },
+  audio,
   phys,
   fx,
   get layout() { return layout; },

@@ -19,7 +19,8 @@ Futebol de botão in the browser: two players share one phone or laptop and take
   - **Fácil / Easy:** misses a lot, plays slowly, defends slowly.
   - **Médio / Medium:** plays clean (avoids fouls and its own keeper), calls its shots.
   - **Difícil / Hard:** tries ~30 flicks on a hidden copy of the table and plays the best outcome (defence included), reads shot lines with its keeper, and uses the Super Flick.
-- Sound effects are synthesized in code (mute with the speaker chip); phones also get small vibrations on big hits and goals.
+- **Real-table look:** felt field, and pieces in your choice of **pérola, tartaruga, acrílico or mármore** (pick on the start screen; teams are named after their material). The menu uses the table illustration on paper.
+- **Real-table sound:** recorded flick, disc, ball, wall and net sounds, three whistles, a goal roar and a quiet crowd loop. Mute with the speaker chip; phones also get small vibrations on big hits and goals.
 - Portuguese and English UI, switch with the chip at the bottom right.
 
 ## Develop
@@ -31,18 +32,23 @@ npm test           # rules + physics unit tests (Vitest)
 npm run test:e2e   # headless Chromium smoke tests (Playwright)
 npm run test:balance  # ~80 s CPU-vs-CPU simulations: checks Fácil < Médio < Difícil, fouls and own goals
 npm run build      # type-check and build to dist/
+python3 scripts/optimize-assets.py   # shrink new art dropped in public/assets (only ever downscales)
 ```
 
 If Playwright can't find its browser locally, run `npx playwright install chromium`, or set `CHROMIUM_PATH` to an existing Chromium binary.
 
 ## How it's built
 
-- Vite + TypeScript, no framework. All art is drawn with Canvas 2D (no image assets).
+- Vite + TypeScript, no framework. The table, lines, goals, net and effects are drawn with Canvas 2D; felt and piece materials come from small textures in `public/assets` (pieces are pre-rendered once into sprites). Everything has a code-drawn fallback, so the game never waits for a file.
 - [Planck.js](https://github.com/piqnt/planck.js) (a Box2D port) for physics: continuous collision detection keeps hard flicks from tunnelling through the ball or walls.
 - `src/rules.ts` is a pure state machine (turns, fouls, called shots, goals) with no physics or DOM, so it is unit-tested on its own.
 - `src/ai.ts` holds the CPU level profiles and the Fácil/Médio planners (pure, unit-tested); `src/lookahead.ts` is Difícil's time-sliced search on a hidden physics copy; `tests/helpers/sim.ts` plays whole CPU matches headlessly for the balance tests.
 - `src/fx.ts` and `src/audio.ts` are the particles, shake and synthesized sound.
 - Field is simulated in landscape; portrait screens rotate the view and input.
+
+## Art and sound
+
+Files live in `public/assets` (see its README for credits). They are kept small for phones: textures are 128–256 px WebP (about 10 KB for the felt, 1–4 KB per piece material), the table illustration is 43 KB, and sounds are loaded only after the first tap. A test checks every referenced file exists, that nothing unused is shipped, and the size budget. The first upload's full-size originals are in git history (commit `2f76ca1`).
 
 ## Deployment
 

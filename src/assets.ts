@@ -15,6 +15,13 @@ export const SOUND_NAMES = [
 ] as const;
 export type SoundName = (typeof SOUND_NAMES)[number];
 
+/**
+ * The crowd loop file carries `pad` seconds of the loop's tail in front and of its head behind, and the
+ * loop window is [pad, pad + length]. The audio repeats exactly every `length` seconds, so the loop is
+ * seamless wherever a decoder places the window (see scripts/make-crowd.py and scripts/check-crowd.py).
+ */
+export const CROWD_LOOP = { pad: 0.2, length: 8 } as const;
+
 /** Every file the game loads, relative to public/assets (checked by a test). */
 export const ASSET_FILES: string[] = [
   'textures/feltro.webp', 'textures/papel.webp',

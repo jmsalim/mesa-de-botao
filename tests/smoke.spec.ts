@@ -223,10 +223,22 @@ test.describe('real-table assets', () => {
       await expect(page.locator('#ov-btn')).toBeInViewport({ ratio: 1 });
       await expect(page.locator('#ov-btn2')).toBeInViewport({ ratio: 1 });
       await expect(page.locator('#skins')).toBeInViewport({ ratio: 1 });
+      await expect(page.locator('#ov-sound')).toBeInViewport({ ratio: 1 });
       // nothing makes the layout wider than the screen (it used to on 320 px phones)
       const widths = await page.evaluate(() => ({ app: document.getElementById('app')!.getBoundingClientRect().width, card: document.querySelector('.card')!.getBoundingClientRect().right }));
       expect(widths.app).toBeLessThanOrEqual(vp.w);
       expect(widths.card).toBeLessThanOrEqual(vp.w);
+    });
+  }
+
+  for (const w of [430, 390, 375, 360]) {
+    test(`team names in the score bar are not cut off (${w} px wide)`, async ({ page }) => {
+      await page.setViewportSize({ width: w, height: 800 });
+      await page.goto('./');
+      for (const id of ['#name0', '#name1']) {
+        const m = await page.locator(id).evaluate((e) => ({ scroll: e.scrollWidth, client: e.clientWidth }));
+        expect(m.scroll, `${id} is truncated at ${w}px`).toBeLessThanOrEqual(m.client);
+      }
     });
   }
 
@@ -253,5 +265,166 @@ test.describe('real-table assets', () => {
     expect(shots.length).toBeGreaterThanOrEqual(2);
     // ...and the 1 s synthesized noise fallback was not used for them
     expect(starts.filter((x) => !x.loop && x.d === 1)).toEqual([]);
+  });
+});
+
+test.describe('crowd sound', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  /** Decode a sound in the browser and return its samples (the real decoder, not ffmpeg). */
+  const decodeInPage = (page: Page, name: string) =>
+    page.evaluate(async (n) => {
+      const res = await fetch(`/mesa-de-botao/assets/sounds/${n}.mp3`);
+      const off = new OfflineAudioContext(1, 44100, 44100);
+      const buf = await off.decodeAudioData(await res.arrayBuffer());
+      const x = buf.getChannelData(0);
+      let peak = 0, sum = 0;
+      for (let i = 0; i < x.length; i++) { peak = Math.max(peak, Math.abs(x[i])); sum += x[i] * x[i]; }
+      return { peak, rms: Math.sqrt(sum / x.length), seconds: buf.duration };
+    }, name);
+
+  test('the new crowd loop is a soft, quiet murmur and loops without a seam (real browser decoder)', async ({ page }) => {
+    await page.goto('./');
+    const r = await page.evaluate(async () => {
+      const base = '/mesa-de-botao/assets/sounds/crowd-loop.mp3';
+      const PAD = 0.2, LEN = 8;
+      const dec = new OfflineAudioContext(1, 22050, 22050);
+      const buf = await dec.decodeAudioData(await (await fetch(base)).arrayBuffer());
+      const sr = buf.sampleRate;
+      // play it the way the game does: loop the window [pad, pad+length], for 26 s
+      const secs = 26;
+      const off = new OfflineAudioContext(1, Math.ceil(sr * secs), sr);
+      const src = off.createBufferSource();
+      src.buffer = buf; src.loop = true; src.loopStart = PAD; src.loopEnd = PAD + LEN;
+      src.connect(off.destination); src.start(0, PAD);
+      const x = (await off.startRendering()).getChannelData(0);
+      const db = (v: number) => 20 * Math.log10(Math.max(v, 1e-9));
+      // spectrum (average of Hann-windowed 4096 FFTs, naive radix-2)
+      const N = 4096;
+      const fft = (re: Float64Array, im: Float64Array) => {
+        for (let i = 1, j = 0; i < N; i++) { let bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; } }
+        for (let len = 2; len <= N; len <<= 1) {
+          const ang = (-2 * Math.PI) / len;
+          for (let i = 0; i < N; i += len) for (let k = 0; k < len / 2; k++) {
+            const wr = Math.cos(ang * k), wi = Math.sin(ang * k);
+            const ur = re[i + k], ui = im[i + k];
+            const vr = re[i + k + len / 2] * wr - im[i + k + len / 2] * wi, vi = re[i + k + len / 2] * wi + im[i + k + len / 2] * wr;
+            re[i + k] = ur + vr; im[i + k] = ui + vi; re[i + k + len / 2] = ur - vr; im[i + k + len / 2] = ui - vi;
+          }
+        }
+      };
+      const psd = new Float64Array(N / 2);
+      for (let s = sr; s + N < x.length; s += N) {
+        const re = new Float64Array(N), im = new Float64Array(N);
+        for (let i = 0; i < N; i++) re[i] = x[s + i] * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N));
+        fft(re, im);
+        for (let i = 0; i < N / 2; i++) psd[i] += re[i] * re[i] + im[i] * im[i];
+      }
+      let tot = 0, cen = 0, harsh = 0, high = 0;
+      for (let i = 1; i < N / 2; i++) { const f = (i * sr) / N; tot += psd[i]; cen += f * psd[i]; if (f >= 2000 && f < 6000) harsh += psd[i]; if (f >= 6000) high += psd[i]; }
+      // level and "breathing"
+      let sum = 0; for (let i = Math.floor(sr); i < x.length; i++) sum += x[i] * x[i];
+      const rms = Math.sqrt(sum / (x.length - sr));
+      const fr = Math.floor(0.1 * sr), lv: number[] = [];
+      for (let i = Math.floor(sr); i + fr < x.length; i += fr) { let q = 0; for (let k = 0; k < fr; k++) q += x[i + k] * x[i + k]; lv.push(db(Math.sqrt(q / fr))); }
+      const mean = lv.reduce((a, b) => a + b, 0) / lv.length;
+      const std = Math.sqrt(lv.reduce((a, b) => a + (b - mean) ** 2, 0) / lv.length);
+      // the seam: biggest sample step within 50 ms of each loop point vs biggest step in ordinary 100 ms stretches
+      const maxStep = (a: number, b: number) => { let m = 0; for (let i = a + 1; i < b; i++) m = Math.max(m, Math.abs(x[i] - x[i - 1])); return m; };
+      const half = Math.floor(0.05 * sr);
+      const seams = [1, 2].map((k) => maxStep(Math.floor(k * LEN * sr) - half, Math.floor(k * LEN * sr) + half));
+      const ordinary: number[] = [];
+      for (let t0 = 1.0; t0 < 7.0; t0 += 0.37) ordinary.push(maxStep(Math.floor(t0 * sr), Math.floor(t0 * sr) + 2 * half));
+      const ordMean = ordinary.reduce((a, b) => a + b, 0) / ordinary.length;
+      return { seconds: buf.duration, sr, centroid: cen / tot, harshPct: (100 * harsh) / tot, highPct: (100 * high) / tot, rmsDb: db(rms), std, seamExcess: Math.max(...seams) / ordMean };
+    });
+    console.log('crowd loop in Chromium:', JSON.stringify(r));
+    expect(r.seconds).toBeGreaterThan(8.3);
+    expect(r.seconds).toBeLessThan(8.5);
+    expect(r.centroid).toBeLessThan(900);        // a murmur, not hiss (the old file: 3.8 kHz)
+    expect(r.harshPct).toBeLessThan(3);          // almost nothing in the harsh 2-6 kHz zone (old: 31%)
+    expect(r.highPct).toBeLessThan(1);
+    expect(r.rmsDb).toBeLessThan(-20);           // quiet file, headroom for the mix (old: -16)
+    expect(r.std).toBeGreaterThan(1.5);          // it breathes (old: 0.8 dB)
+    expect(r.seamExcess).toBeLessThan(1.3);      // the loop point is indistinguishable from ordinary audio
+  });
+
+  test('no sound can clip at its loudest gain, and the murmur sits well under hits, whistles and the roar', async ({ page }) => {
+    await page.goto('./');
+    const names = ['flick', 'disc-hit', 'ball-tap', 'wall-bounce', 'net', 'whistle-start', 'whistle-foul', 'whistle-end', 'crowd-goal', 'crowd-loop'];
+    const decoded: Record<string, { peak: number; rms: number }> = {};
+    for (const n of names) decoded[n] = await decodeInPage(page, n);
+    const mix = await page.evaluate(() => { const a = (window as any).__botao.audio; return { master: a.MIX.master, bed: a.MIX.crowdBed, swell: a.MIX.goalSwell, win: a.MIX.winSwell, disc: a.MIX.disc, gains: a.MAX_GAIN as Record<string, number> }; });
+    for (const n of names) {
+      const peak = decoded[n].peak * mix.gains[n] * mix.master;
+      expect(peak, `${n} peaks at ${(20 * Math.log10(peak)).toFixed(1)} dBFS`).toBeLessThan(0.9); // headroom: no digital clipping
+    }
+    const db = (v: number) => 20 * Math.log10(v);
+    const bed = db(decoded['crowd-loop'].rms * mix.bed * mix.master);
+    const swelled = db(decoded['crowd-loop'].rms * mix.bed * mix.swell * mix.master);
+    const gain = (r: [number, number], p: number) => r[0] + (r[1] - r[0]) * p;
+    const softHit = db(decoded['disc-hit'].rms * mix.disc[0] * mix.master);                 // the very softest tap
+    const hit = db(decoded['disc-hit'].rms * gain(mix.disc, 0.5) * mix.master);             // a typical hit
+    const whistle = db(decoded['whistle-foul'].rms * mix.gains['whistle-foul'] * mix.master);
+    const roar = db(decoded['crowd-goal'].rms * mix.gains['crowd-goal'] * mix.master);
+    console.log(`levels (dBFS RMS): murmur ${bed.toFixed(1)}, swelled ${swelled.toFixed(1)}, softest hit ${softHit.toFixed(1)}, typical hit ${hit.toFixed(1)}, whistle ${whistle.toFixed(1)}, roar ${roar.toFixed(1)}`);
+    expect(bed).toBeLessThan(-34);
+    expect(softHit - bed).toBeGreaterThan(6);    // even the gentlest tap is audible over the murmur
+    expect(hit - bed).toBeGreaterThan(10);       // typical hits stand clearly above it
+    expect(whistle - bed).toBeGreaterThan(20);   // whistles cut right through
+    expect(roar - swelled).toBeGreaterThan(5);   // the goal roar stays on top of the swelling murmur
+  });
+
+  test('the murmur rests quietly, swells on a goal and settles back, and dips under a whistle', async ({ page }) => {
+    await page.goto('./');
+    await page.click('#ov-btn'); // starts the match: unlocks audio, loads samples, starts the crowd
+    await expect.poll(() => page.evaluate(() => (window as any).__botao.audio.samplesLoaded().length), { timeout: 15_000 }).toBe(10);
+    const bed = await page.evaluate(() => (window as any).__botao.audio.MIX.crowdBed as number);
+    const level = () => page.evaluate(() => (window as any).__botao.audio.crowdLevel() as number);
+    await expect.poll(level, { timeout: 8_000 }).toBeGreaterThan(bed * 0.9);
+    expect(await level()).toBeLessThan(bed * 1.1);
+    await page.evaluate(() => (window as any).__botao.audio.goal());
+    await expect.poll(level, { timeout: 4_000 }).toBeGreaterThan(bed * 1.8);      // swells
+    await expect.poll(level, { timeout: 15_000 }).toBeLessThan(bed * 1.15);        // and settles back
+    // a whistle dips the murmur briefly, then lets it return
+    const duck = () => page.evaluate(() => (window as any).__botao.audio.crowdDuckLevel() as number);
+    expect(await duck()).toBeGreaterThan(0.95);
+    await page.evaluate(() => (window as any).__botao.audio.whistle());
+    await expect.poll(duck, { timeout: 2_000 }).toBeLessThan(0.75);
+    await expect.poll(duck, { timeout: 6_000 }).toBeGreaterThan(0.95);
+  });
+});
+
+test.describe('sound switch in the menu', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('toggles sound, stays in step with the footer chip, and is remembered', async ({ page }) => {
+    await page.goto('./');
+    const muted = () => page.evaluate(() => (window as any).__botao.audio.isMuted() as boolean);
+    await expect(page.locator('#ov-sound')).toBeVisible();
+    await expect(page.locator('#ov-sound')).toContainText('Som ligado');
+    expect(await muted()).toBe(false);
+    await page.click('#ov-sound');
+    await expect(page.locator('#ov-sound')).toContainText('Som desligado');
+    await expect(page.locator('#mute')).toHaveText('🔇');
+    expect(await muted()).toBe(true);
+    expect(await page.evaluate(() => localStorage.getItem('botao-muted'))).toBe('1');
+    await page.reload();                                   // remembered
+    await expect(page.locator('#ov-sound')).toContainText('Som desligado');
+    await page.click('#mute');                             // the footer chip flips the same setting
+    await expect(page.locator('#ov-sound')).toContainText('Som ligado');
+    expect(await muted()).toBe(false);
+    // language follows the switch
+    await page.click('#lang');
+    await expect(page.locator('#ov-sound')).toContainText('Sound on');
+  });
+
+  test('is also on the level picker', async ({ page }) => {
+    await page.goto('./');
+    await page.click('#ov-btn2');
+    await expect(page.locator('#ov-title')).toHaveText('Escolha a dificuldade');
+    await expect(page.locator('#ov-sound')).toBeVisible();
+    await page.click('#ov-sound');
+    await expect(page.locator('#mute')).toHaveText('🔇');
   });
 });

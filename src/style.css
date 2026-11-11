@@ -114,7 +114,7 @@ button.small { font-size: .9rem; padding: 8px 16px; border-radius: 12px; box-sha
 .card p { color: #4a3322; opacity: 1; }
 .card ul { color: #2b1a10; }
 #hero {
-  height: clamp(84px, 20vh, 150px); margin: -6px -6px 12px; border-radius: 14px; border: 1px solid rgba(90,60,30,.35);
+  height: clamp(56px, 13vh, 130px); margin: -6px -6px 10px; border-radius: 14px; border: 1px solid rgba(90,60,30,.35);
   background: var(--hero) 78% 52% / cover no-repeat, #efe9da;
 }
 #hero[hidden] { display: none; }
@@ -168,7 +168,7 @@ button.small { font-size: .9rem; padding: 8px 16px; border-radius: 12px; box-sha
 #hud { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
 .team { min-width: 0; }
 .tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-@media (max-width: 380px) {
+@media (max-width: 430px) {
   #hud { padding-left: 8px; padding-right: 8px; gap: 4px 6px; }
   .team { gap: 5px; font-size: .88rem; }
   #score { font-size: 1.7rem; gap: 6px; }
@@ -176,3 +176,10 @@ button.small { font-size: .9rem; padding: 8px 16px; border-radius: 12px; box-sha
   .charge { gap: 2px; }
   .dot { width: 15px; height: 15px; }
 }
+
+/* in-menu sound switch (the footer speaker chip toggles the same setting) */
+.ov-row { display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.ov-row #ov-back { margin-top: 0; }
+#ov-sound { min-height: 36px; padding: 6px 14px; font-size: .85rem; color: #4a3322; background: rgba(0,0,0,.06); border-color: rgba(0,0,0,.25); }
+#ov-sound[aria-pressed="true"] { background: rgba(122,58,5,.14); }
+@media (max-height: 600px) { .ov-row { margin-top: 6px; } #ov-sound { min-height: 32px; padding: 4px 12px; } }

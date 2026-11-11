@@ -153,3 +153,50 @@ describe('goals', () => {
     expect(s.winner).toBe(0);
   });
 });
+
+describe('super flick charge', () => {
+  const touchFlick = () => {
+    r.startFlick(s);
+    r.contact(s, btn(0), ball);
+    r.settle(s);
+  };
+
+  it('each ball-touching flick banks one charge; the third announces the super flick', () => {
+    touchFlick();
+    expect(s.charge[0]).toBe(1);
+    touchFlick();
+    expect(s.charge[0]).toBe(2);
+    touchFlick();
+    expect(s.charge[0]).toBe(3);
+    expect(s.notice?.key === 'superReady' || s.turn === 1).toBe(true);
+  });
+
+  it('missing the ball or fouling banks nothing', () => {
+    r.startFlick(s);
+    r.settle(s);
+    expect(s.charge).toEqual([0, 0]);
+    s.turn = 0; s.flicksLeft = 3;
+    r.startFlick(s);
+    r.contact(s, btn(0), btn(1));
+    r.contact(s, btn(0), ball);
+    r.settle(s);
+    expect(s.charge).toEqual([0, 0]);
+  });
+
+  it('a full charge makes the next flick super and is then spent', () => {
+    s.charge[0] = 3;
+    r.startFlick(s);
+    expect(s.superActive).toBe(true);
+    expect(s.charge[0]).toBe(0);
+    r.settle(s);
+    expect(s.superActive).toBe(false);
+  });
+
+  it('wall contacts never count as touching the ball or a foul', () => {
+    r.startFlick(s);
+    r.contact(s, ball, { kind: 'wall' });
+    r.contact(s, btn(0), { kind: 'wall' });
+    expect(s.ballTouched).toBe(false);
+    expect(s.foul).toBe(false);
+  });
+});

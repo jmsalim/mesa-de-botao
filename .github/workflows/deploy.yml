@@ -25,6 +25,8 @@ jobs:
       - run: npm ci
       - name: Unit tests
         run: npm test
+      - name: CPU balance tests
+        run: npm run test:balance
       - name: Build
         run: npm run build
       - name: End-to-end smoke tests

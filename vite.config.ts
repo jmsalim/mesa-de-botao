@@ -4,5 +4,5 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   base: '/mesa-de-botao/',
   build: { target: 'es2022' },
-  test: { include: ['tests/**/*.test.ts'] },
+  test: { include: ['tests/*.test.ts'] }, // tests/balance has its own (slow) suite
 } as Parameters<typeof defineConfig>[0]);

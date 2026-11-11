@@ -78,5 +78,5 @@ export class Input {
   }
 }
 
-export const PICK_RADIUS = BUTTON_R + 0.28;
+export const PICK_RADIUS = BUTTON_R + 0.36;
 export const KEEPER_PICK = { x: KEEPER_SIZE.d / 2 + 0.45, y: KEEPER_SIZE.w / 2 + 0.3 };

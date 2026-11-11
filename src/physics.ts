@@ -1,6 +1,6 @@
 import * as planck from 'planck';
 import {
-  BALL_R, BUTTON_R, FIELD, KEEPER_RANGE, KEEPER_SIZE, KEEPER_X, MAX_BALL_SPEED, other, type Team,
+  BALL_R, BUTTON_R, FIELD, KEEPER_RANGE, KEEPER_SIZE, KEEPER_X, MAX_BALL_SPEED, BUTTON_DAMPING, OWN_GOAL_TRAP, PLAY_MARGIN, STUCK_MARGIN, SUPER_DENSITY, other, type Team,
 } from './config';
 import type { ContactInfo } from './rules';
 
@@ -10,6 +10,12 @@ const CAT = { BUTTON: 1, BALL: 2, WALL: 4, BARRIER: 8, KEEPER: 16 };
 const STEP = 1 / 120;
 
 export const BUTTONS_PER_TEAM = 4;
+
+export interface Snapshot {
+  buttons: [number, number][][];
+  ball: [number, number];
+  keepers: [number, number];
+}
 
 /** Formation for team 0 in landscape coordinates; team 1 is mirrored. */
 const FORMATION: [number, number][] = [
@@ -25,6 +31,9 @@ export class Physics {
   keepers: planck.Body[] = [];
   ball!: planck.Body;
   onContact: (a: ContactInfo, b: ContactInfo) => void = () => {};
+  /** Fired for every new contact with the closing speed and contact point (for sound and effects). */
+  onImpact: (a: ContactInfo, b: ContactInfo, speed: number, x: number, y: number) => void = () => {};
+  private superBody: planck.Body | null = null;
   private acc = 0;
   /** Seconds all bodies have been (almost) still. */
   stillFor = 0;
@@ -39,7 +48,13 @@ export class Physics {
     this.world.on('begin-contact', (c) => {
       const a = c.getFixtureA().getBody().getUserData() as ContactInfo | null;
       const b = c.getFixtureB().getBody().getUserData() as ContactInfo | null;
-      if (a && b) this.onContact(a, b);
+      if (!a || !b) return;
+      const bA = c.getFixtureA().getBody(), bB = c.getFixtureB().getBody();
+      const speed = Vec2.sub(bA.getLinearVelocity(), bB.getLinearVelocity()).length();
+      const wm = c.getWorldManifold(null);
+      const pt = wm && wm.points[0] ? wm.points[0] : bA.getPosition();
+      this.onContact(a, b);
+      this.onImpact(a, b, speed, pt.x, pt.y);
     });
     this.resetKickoff();
   }
@@ -47,17 +62,17 @@ export class Physics {
   private buildWalls(): void {
     const { L, W, goalW, goalD } = FIELD;
     const t = 0.5; // wall half-thickness
-    const body = this.world.createBody({ type: 'static', position: Vec2(0, 0) });
-    const opt = { friction: 0, restitution: 0.65, filterCategoryBits: CAT.WALL };
+    const body = this.world.createBody({ type: 'static', position: Vec2(0, 0), userData: { kind: 'wall' } satisfies ContactInfo });
+    const opt = { friction: 0, restitution: 0.5, filterCategoryBits: CAT.WALL };
     const box = (hx: number, hy: number, cx: number, cy: number) =>
       body.createFixture(planck.Box(hx, hy, Vec2(cx, cy), 0), opt);
     const midX = L / 2;
     // top and bottom rails (span the goal pockets as well)
     box(midX + goalD + t, t, midX, -t);
     box(midX + goalD + t, t, midX, W + t);
-    // pocket back walls
-    box(t, W / 2 + t, -goalD - t, W / 2);
-    box(t, W / 2 + t, L + goalD + t, W / 2);
+    // pocket back walls: the net, so it absorbs the ball instead of bouncing it
+    const netOpt = { friction: 0, restitution: 0.08, filterCategoryBits: CAT.WALL };
+    for (const cx of [-goalD - t, L + goalD + t]) body.createFixture(planck.Box(t, W / 2 + t, Vec2(cx, W / 2), 0), netOpt);
     // end walls with the goal mouth left open
     const seg = (W - goalW) / 2;
     for (const x of [0, L]) {
@@ -74,7 +89,7 @@ export class Physics {
 
   private makeButton(team: Team, idx: number): planck.Body {
     const b = this.world.createBody({
-      type: 'dynamic', bullet: true, linearDamping: 4.2, fixedRotation: true,
+      type: 'dynamic', bullet: true, linearDamping: BUTTON_DAMPING, fixedRotation: true,
       userData: { kind: 'button', team, idx } satisfies ContactInfo,
     });
     b.createFixture(planck.Circle(BUTTON_R), {
@@ -100,11 +115,11 @@ export class Physics {
 
   private makeBall(): planck.Body {
     const b = this.world.createBody({
-      type: 'dynamic', bullet: true, linearDamping: 1.5, fixedRotation: true,
+      type: 'dynamic', bullet: true, linearDamping: 1.8, fixedRotation: true,
       userData: { kind: 'ball' } satisfies ContactInfo,
     });
     b.createFixture(planck.Circle(BALL_R), {
-      density: 0.9, friction: 0, restitution: 0.75,
+      density: 0.9, friction: 0, restitution: 0.6,
       filterCategoryBits: CAT.BALL,
       filterMaskBits: CAT.BUTTON | CAT.WALL | CAT.KEEPER,
     });
@@ -145,6 +160,27 @@ export class Physics {
     this.stillFor = 0;
   }
 
+  /** Positions of everything that can move, for the CPU's hidden-copy lookahead. */
+  snapshot(): Snapshot {
+    const xy = (b: planck.Body): [number, number] => [b.getPosition().x, b.getPosition().y];
+    return {
+      buttons: [this.buttons[0].map(xy), this.buttons[1].map(xy)],
+      ball: xy(this.ball),
+      keepers: [this.keepers[0].getPosition().y, this.keepers[1].getPosition().y],
+    };
+  }
+
+  loadSnapshot(s: Snapshot): void {
+    this.endSuper();
+    for (const team of [0, 1] as Team[]) {
+      s.buttons[team].forEach(([x, y], i) => this.stop(this.buttons[team][i], x, y));
+      this.keepers[team].setPosition(Vec2(this.keepers[team].getPosition().x, s.keepers[team]));
+    }
+    this.stop(this.ball, s.ball[0], s.ball[1]);
+    this.stillFor = 0;
+    this.acc = 0;
+  }
+
   allButtons(): planck.Body[] {
     return [...this.buttons[0], ...this.buttons[1]];
   }
@@ -160,8 +196,14 @@ export class Physics {
     return this.keepers[team].getPosition().y;
   }
 
-  flick(team: Team, idx: number, vx: number, vy: number): void {
+  flick(team: Team, idx: number, vx: number, vy: number, sup = false): void {
     const b = this.buttons[team][idx];
+    if (sup) {
+      // a super flick is a heavy button: it carries far more momentum into the ball
+      b.getFixtureList()!.setDensity(SUPER_DENSITY);
+      b.resetMassData();
+      this.superBody = b;
+    }
     b.setLinearVelocity(Vec2(vx, vy));
     b.setAwake(true);
     this.stillFor = 0;
@@ -183,6 +225,7 @@ export class Physics {
     for (const b of bodies) {
       const v = b.getLinearVelocity();
       const sp = v.length();
+      if (b === this.ball && (b.getPosition().x < 0 || b.getPosition().x > FIELD.L)) b.setLinearVelocity(v.mul(0.9)); // in the net
       if (b === this.ball && sp > MAX_BALL_SPEED) b.setLinearVelocity(v.mul(MAX_BALL_SPEED / sp));
       else if (sp < 0.5) b.setLinearVelocity(v.mul(0.95));
       if (sp < 0.06) b.setLinearVelocity(Vec2(0, 0));
@@ -195,17 +238,87 @@ export class Physics {
     return this.stillFor > 0.2;
   }
 
+  /** Freeze the buttons only: the ball keeps rolling into the net. */
+  freezeButtons(): void {
+    for (const b of this.allButtons()) b.setLinearVelocity(Vec2(0, 0));
+    this.endSuper();
+  }
+
+  /** Ball hugging `team`'s own end wall: every flick from the field only pushes it towards its own goal. */
+  ownGoalTrap(team: Team): boolean {
+    const p = this.ball.getPosition();
+    return team === 0 ? p.x < OWN_GOAL_TRAP : p.x > FIELD.L - OWN_GOAL_TRAP;
+  }
+
+  /**
+   * Ball hugging a wall (not in front of a goal mouth), or, for `team`, trapped against its own goal.
+   * Players can then reposition it; the attacker's chance in front of the opponent's goal is left alone.
+   */
+  ballStuck(team?: Team): boolean {
+    const p = this.ball.getPosition();
+    const { L, W, goalW } = FIELD;
+    const nearSide = p.y < STUCK_MARGIN || p.y > W - STUCK_MARGIN;
+    const inMouth = Math.abs(p.y - W / 2) < goalW / 2 + 0.05;
+    const nearEnd = (p.x < STUCK_MARGIN || p.x > L - STUCK_MARGIN) && !inMouth;
+    return nearSide || nearEnd || (team !== undefined && this.ownGoalTrap(team));
+  }
+
+  /** What the CPU treats as truly stuck: a corner, or trapped against its own goal. */
+  ballTrapped(team: Team): boolean {
+    return this.ballInCorner() || this.ownGoalTrap(team);
+  }
+
+  /** Ball jammed in a corner where no flick can free it. */
+  ballInCorner(): boolean {
+    const p = this.ball.getPosition();
+    const { L, W } = FIELD;
+    const side = p.y < 0.55 || p.y > W - 0.55;
+    const end = p.x < 0.7 || p.x > L - 0.7;
+    return side && end;
+  }
+
+  /** Put the ball on the nearest free spot of the playable zone. Returns old and new position. */
+  repositionBall(): { from: { x: number; y: number }; to: { x: number; y: number } } {
+    const { L, W } = FIELD;
+    const cur = this.ball.getPosition();
+    const from = { x: cur.x, y: cur.y };
+    const clampX = (x: number) => Math.max(PLAY_MARGIN.x, Math.min(L - PLAY_MARGIN.x, x));
+    const clampY = (y: number) => Math.max(PLAY_MARGIN.y, Math.min(W - PLAY_MARGIN.y, y));
+    const free = (x: number, y: number) =>
+      this.allButtons().every((b) => Vec2.distance(b.getPosition(), Vec2(x, y)) > BUTTON_R + BALL_R + 0.2);
+    for (const r of [0, 0.4, 0.8, 1.2, 1.6, 2.0]) {
+      for (let i = 0; i < (r === 0 ? 1 : 12); i++) {
+        const a = (i / 12) * Math.PI * 2;
+        const x = clampX(from.x + Math.cos(a) * r), y = clampY(from.y + Math.sin(a) * r);
+        if (free(x, y)) { this.stop(this.ball, x, y); this.stillFor = 0; return { from, to: { x, y } }; }
+      }
+    }
+    this.stop(this.ball, L / 2, W / 2);
+    this.stillFor = 0;
+    return { from, to: { x: L / 2, y: W / 2 } };
+  }
+
+  /** Back to normal weight after a super flick. */
+  endSuper(): void {
+    if (!this.superBody) return;
+    this.superBody.getFixtureList()!.setDensity(1);
+    this.superBody.resetMassData();
+    this.superBody = null;
+  }
+
   /** Stop everything (safety net if something keeps jittering). */
   freeze(): void {
     for (const b of [...this.allButtons(), this.ball]) b.setLinearVelocity(Vec2(0, 0));
+    this.endSuper();
   }
 
-  /** Team whose goal the ball has fully crossed into, if any. */
+  /** Team whose goal the ball has crossed into (centre past the goal line), if any. */
   ballInGoal(): Team | null {
     const p = this.ball.getPosition();
     if (Math.abs(p.y - FIELD.W / 2) > FIELD.goalW / 2) return null;
-    if (p.x < -BALL_R) return 0;
-    if (p.x > FIELD.L + BALL_R) return 1;
+    // centre across the line: a ball can't be left resting half over it, out of every button's reach
+    if (p.x < 0) return 0;
+    if (p.x > FIELD.L) return 1;
     return null;
   }
 

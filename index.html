@@ -10,26 +10,35 @@
   <body>
     <div id="app">
       <header id="hud">
-        <div class="team" id="hud-t0"><span class="dot t0"></span><span class="tname" id="name0"></span></div>
+        <div class="team" id="hud-t0"><span class="dot t0"></span><span class="tname" id="name0"></span><span class="charge" id="ch0"></span></div>
         <div id="score"><span id="s0">0</span><span class="sep">–</span><span id="s1">0</span></div>
-        <div class="team right" id="hud-t1"><span class="tname" id="name1"></span><span class="dot t1"></span></div>
+        <div class="team right" id="hud-t1"><span class="charge" id="ch1"></span><span class="tname" id="name1"></span><span class="dot t1"></span></div>
         <div id="turn"><span id="turn-text"></span><span id="pips"></span></div>
       </header>
       <main id="stage">
         <canvas id="board"></canvas>
         <div id="toast" role="status" aria-live="polite"></div>
+        <button id="free" class="primary small" hidden></button>
         <div id="overlay" hidden>
           <div class="card">
+            <div id="hero" hidden role="img" aria-label="Mesa de botão"></div>
             <h1 id="ov-title"></h1>
             <p id="ov-sub"></p>
-            <ul id="ov-list"></ul>
-            <button id="ov-btn" class="primary"></button>
+            <div id="skins" hidden>
+              <div id="skins-title"></div>
+              <div class="skinrow"><span class="skinlabel" id="skin-l0"></span><span class="swatches" id="sw0"></span></div>
+              <div class="skinrow"><span class="skinlabel" id="skin-l1"></span><span class="swatches" id="sw1"></span></div>
+            </div>
+            <div class="btns"><button id="ov-btn" class="primary"></button><button id="ov-btn2" class="primary alt"></button><button id="ov-btn3" class="primary alt" hidden></button></div>
+            <button id="ov-back" class="chip" hidden></button>
+            <details id="ov-details"><summary id="ov-summary"></summary><ul id="ov-list"></ul></details>
           </div>
         </div>
       </main>
       <footer id="bar">
         <button id="shoot" class="primary big"></button>
         <button id="lang" class="chip" aria-label="Language"></button>
+        <button id="mute" class="chip" aria-label="Sound"></button>
       </footer>
     </div>
     <script type="module" src="/src/main.ts"></script>
